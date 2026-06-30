@@ -1,0 +1,7 @@
+mf:
+    checkpoint_path: ./bfcl_mf_model.pt
+    text_dim: 384
+causal_llm:
+    checkpoint_path: routellm/causal_llm_gpt4_augmented
+bert:
+    checkpoint_path: routellm/bert_gpt4_augmented

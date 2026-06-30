@@ -1,0 +1,22 @@
+LLM_Routing
+Copyright 2026 joohj911
+
+This product is a modified derivative of RouteLLM
+(https://github.com/lm-sys/RouteLLM), Copyright 2024 The RouteLLM Authors
+(Isaac Ong, Amjad Almahairi, Vincent Wu, Wei-Lin Chiang, Tianhao Wu,
+Joseph E. Gonzalez, M Waleed Kadous, Ion Stoica), licensed under the
+Apache License, Version 2.0.
+
+Modifications made in this repository include, but are not limited to:
+  - Target task changed to agent/tool-calling routing, evaluated on
+    BFCL v4 (Berkeley Function Calling Leaderboard).
+  - Model pair changed to Qwen3.5 models (e.g. 0.8B / 2B weak vs 9B strong).
+  - Query embeddings replaced with local intfloat/multilingual-e5-* models
+    (no external embedding API).
+  - Added routers: UniRoute cluster-based router and a per-model regression
+    router (R2-Router skeleton, budget-free).
+  - Added BFCL data preparation, model evaluation, analysis, and reporting
+    tooling.
+
+The original Apache License, Version 2.0, applies to this work; see the
+LICENSE file for the full terms.

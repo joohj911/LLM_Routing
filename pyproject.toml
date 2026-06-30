@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lm_routing"
+version = "0.2.0"
+description = "A framework for training and evaluating LLM routers for tool-calling (MF + UniRoute)."
+readme = "README.md"
+classifiers = ["Programming Language :: Python :: 3"]
+dependencies = [
+	'importlib-metadata; python_version<"3.10"',
+	'pyyaml>=6.0',
+	'pydantic>=2.0',
+	"numpy>=1.24,<2",
+	'pandas>=1.5',
+	# Pinned to the 2.5.x line: newer torch wheels (2.6+) target newer CUDA
+	# runtimes that older NVIDIA drivers do not support. Install the CUDA
+	# build matching your driver FIRST (see README), e.g. cu121:
+	#   pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cu121
+	'torch>=2.5.1,<2.6',
+	'tqdm>=4.65',
+	'transformers>=4.44.0',
+	'accelerate>=0.26.0',
+	'sentence-transformers>=3.0.0',
+	'huggingface_hub>=0.24.0',
+]
+
+[project.optional-dependencies]
+eval = ["matplotlib", "pandarallel", "psutil", "scikit-learn", "openpyxl"]
+# bitsandbytes is required only when using --load-in-4bit in eval_bfcl_models.py
+quant = ["bitsandbytes>=0.43.0"]
+dev = ["black", "isort", "pre-commit"]
+
+[project.urls]
+"Homepage" = "https://github.com/joohj911/LLM_Routing"
+
+[tool.isort]
+profile = "black"
+
+[tool.setuptools.packages.find]
+exclude = ["assets*", "benchmarks*"]
+
+[tool.wheel]
+exclude = ["assets*", "benchmarks*"]
