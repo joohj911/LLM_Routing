@@ -11,9 +11,10 @@ UniRoute K-Means 라우터 학습 스크립트.
 
 학습 절차:
   1. train_data.json → 80%(cluster_train) / 20%(val) stratified split
-  2. cluster_train 임베딩으로 K-Means 학습  (K 후보 sweep)
-  3. 각 K에 대해 val에서 deferral curve AUC 계산 → 최적 K 선택
-  4. 최적 K로 Ψ_weak[k], Ψ_strong[k] (per-cluster error rate) 계산
+  2. cluster_train 임베딩으로 K-Means 학습  (K 후보 sweep, 상한 ≈ Nval/10)
+  3. K 선택(정직화): 각 K에서 Ψ를 cluster_train에서 추정하고 held-out val의 deferral
+     AUC로 평가 → 최적 K. (Ψ를 val에서 추정+같은 val로 선택하면 순환→과적합→단조증가)
+  4. 최적 K로 최종 Ψ_weak[k], Ψ_strong[k] 계산 (psi_source대로: val=논문 최종설계 / train=refit)
   5. 체크포인트 저장
 """
 
@@ -199,14 +200,18 @@ def train_uniroute(
 
     print(f"  cluster_train: {len(cl_idx)} samples, val: {len(val_idx)} samples")
 
-    # K 후보: 넓게 스윕. K는 cluster_train 크기를 넘을 수 없음.
+    # K 후보. 상한은 **val 크기 기준**으로 제한: K 선택 AUC는 held-out val에서
+    # 재니, K가 커져 val 클러스터가 너무 잘게 쪼개지면(클러스터당 몇 개) AUC가
+    # 노이즈에 흔들린다. Nval/10 → val 클러스터당 평균 ~10개를 보장(논문 Nval/50
+    # 취지의 완화판). 사용자가 --k-candidates를 직접 주면 그 값 존중(단 n_cl 이내).
     n_cl = len(cl_idx)
+    n_val = len(val_idx)
     if k_candidates is None:
-        k_candidates = [3, 5, 8, 10, 13, 15, 20, 25, 30, 40, 50, 75, 100]
-        k_candidates.append(max(5, n_cl // 50))
-        k_candidates = sorted(set(k_candidates))
+        k_cap = max(3, n_val // 10)
+        k_candidates = [3, 5, 8, 10, 13, 15, 20, 25, 30, 40, 50, k_cap]
+        k_candidates = sorted(set(k for k in k_candidates if k <= k_cap))
     k_candidates = [k for k in k_candidates if 2 <= k <= n_cl]
-    print(f"\nK candidates: {k_candidates}")
+    print(f"\nK candidates: {k_candidates}  (val={n_val}, cap≈Nval/10)")
 
     # ── psi_source: Ψ(클러스터별 error rate)를 어디서 추정할지 ──
     #   "val"  : KMeans는 cl에서 fit, Ψ는 held-out val에서 추정 (원 UniRoute 논문 설계, 기본값)
@@ -220,13 +225,19 @@ def train_uniroute(
 
     print(f"  (psi_source={psi_source})")
 
-    # ── K 선택 (평가는 항상 val) ──
+    # ── K 선택 (정직화): Ψ는 항상 cluster-train(cl)에서 추정, 평가는 held-out val ──
+    # 논문 부록(§UniRoute K-Means)의 절차: "training set으로 K-means, training set에서
+    # Ψ(Eq.13) 계산, validation set으로 deferral AUC" → Ψ 추정과 평가가 disjoint.
+    # 여기서 psi_source="val"처럼 Ψ를 val에서 추정한 뒤 같은 val로 K를 고르면 순환이 되어
+    # val AUC가 K에 대해 단조증가(클러스터가 잘게 쪼개져 val 라벨을 암기 = 과적합)하고,
+    # 가장 큰 K를 뽑게 된다. 최종 모델의 Ψ 출처는 아래에서 psi_source대로 유지.
     best = {"K": None, "auc": -np.inf}
     for K in k_candidates:
         km = KMeans(n_clusters=K, random_state=seed, n_init=10, max_iter=300).fit(cl_embs)
-        psi_w, psi_s = _psi_for(km, K)
+        psi_w_k = compute_psi(km.labels_, cl_weak, K)
+        psi_s_k = compute_psi(km.labels_, cl_strong, K)
         val_labels = km.predict(val_embs)
-        auc = deferral_auc(hard_scores(psi_w, psi_s, val_labels), val_weak, val_strong)
+        auc = deferral_auc(hard_scores(psi_w_k, psi_s_k, val_labels), val_weak, val_strong)
         print(f"  K={K:3d} → val AUC = {auc:.5f}")
         if auc > best["auc"]:
             best.update({"K": K, "auc": auc})
