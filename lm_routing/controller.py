@@ -74,10 +74,19 @@ class Controller:
     def batch_calculate_win_rate(self, prompts: pd.Series, router: str):
         self._validate_router_threshold(router, 0)
         router_instance = self.routers[router]
-        if router_instance.NO_PARALLEL and self.progress_bar:
-            return prompts.progress_apply(router_instance.calculate_strong_win_rate)
-        elif router_instance.NO_PARALLEL:
-            return prompts.apply(router_instance.calculate_strong_win_rate)
+        if router_instance.NO_PARALLEL:
+            fn = router_instance.calculate_strong_win_rate
+            if self.progress_bar:
+                # Iterate under a plain tqdm bar instead of pandas'
+                # progress_apply. progress_apply relies on tqdm.pandas()
+                # monkeypatching pandas internals, which breaks on pandas >= 2.2
+                # (pandas.core.common.is_builtin_func was removed). This keeps a
+                # progress bar without depending on that fragile integration.
+                return pd.Series(
+                    [fn(p) for p in tqdm(prompts, desc=f"Routing ({router})")],
+                    index=prompts.index,
+                )
+            return prompts.apply(fn)
         else:
             return prompts.parallel_apply(router_instance.calculate_strong_win_rate)
 
