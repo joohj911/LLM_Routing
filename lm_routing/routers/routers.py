@@ -129,6 +129,15 @@ class UniRouteTrainRouter(UniRouteRouter):
 
 
 @no_parallel
+class UniRouteLegacyRouter(UniRouteRouter):
+    """UniRoute variant whose K was chosen with the legacy circular procedure
+    (Ψ estimated on val and scored on the same val), i.e. trained with
+    --k-select-psi val. Kept only to compare that (theoretically overfitting)
+    choice against the honest one on the held-out test set. Identical runtime
+    behaviour to UniRouteRouter; separate class only for its own router name."""
+
+
+@no_parallel
 class PerModelRouter(Router):
     """
     Per-model regression router (R2-Router 골격, budget 제거).
@@ -161,6 +170,7 @@ ROUTER_CLS = {
     "random": RandomRouter,
     "uniroute": UniRouteRouter,
     "uniroute_train": UniRouteTrainRouter,
+    "uniroute_legacy": UniRouteLegacyRouter,
     "permodel": PerModelRouter,
 }
 NAME_TO_CLS = {v: k for k, v in ROUTER_CLS.items()}

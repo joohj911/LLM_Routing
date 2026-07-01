@@ -153,6 +153,7 @@ def train_uniroute(
     assignment: str = "hard",
     embedding_model: str = "intfloat/multilingual-e5-small",
     psi_source: str = "val",
+    k_select_psi: str = "cl",
 ) -> dict:
     print(f"\nLoading train data from {train_data_path}")
     df = pd.read_json(train_data_path)
@@ -231,12 +232,19 @@ def train_uniroute(
     # 여기서 psi_source="val"처럼 Ψ를 val에서 추정한 뒤 같은 val로 K를 고르면 순환이 되어
     # val AUC가 K에 대해 단조증가(클러스터가 잘게 쪼개져 val 라벨을 암기 = 과적합)하고,
     # 가장 큰 K를 뽑게 된다. 최종 모델의 Ψ 출처는 아래에서 psi_source대로 유지.
+    #   k_select_psi="cl"  : Ψ를 cl에서 추정(정직, 논문 부록) — 기본
+    #   k_select_psi="val" : Ψ를 val에서 추정(구버전=circular; test 성능 비교용으로만 유지)
+    print(f"  (k_select_psi={k_select_psi})")
     best = {"K": None, "auc": -np.inf}
     for K in k_candidates:
         km = KMeans(n_clusters=K, random_state=seed, n_init=10, max_iter=300).fit(cl_embs)
-        psi_w_k = compute_psi(km.labels_, cl_weak, K)
-        psi_s_k = compute_psi(km.labels_, cl_strong, K)
         val_labels = km.predict(val_embs)
+        if k_select_psi == "val":
+            psi_w_k = compute_psi(val_labels, val_weak, K)   # circular: Ψ와 채점이 같은 val
+            psi_s_k = compute_psi(val_labels, val_strong, K)
+        else:
+            psi_w_k = compute_psi(km.labels_, cl_weak, K)    # honest: Ψ=cl, 채점=val
+            psi_s_k = compute_psi(km.labels_, cl_strong, K)
         auc = deferral_auc(hard_scores(psi_w_k, psi_s_k, val_labels), val_weak, val_strong)
         print(f"  K={K:3d} → val AUC = {auc:.5f}")
         if auc > best["auc"]:
@@ -330,9 +338,14 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--psi-source", choices=["val", "train"], default="val",
-        help="Ψ(클러스터별 error) 추정 데이터. "
+        help="최종 모델의 Ψ(클러스터별 error) 추정 데이터. "
         "val=held-out val에서 추정(원 UniRoute 논문 설계, 기본), "
-        "train=cl에서 K 선택 후 train 전체로 refit(데이터 더 사용).",
+        "train=K 선택 후 train 전체(cl+val)로 refit(데이터 더 사용).",
+    )
+    parser.add_argument(
+        "--k-select-psi", choices=["cl", "val"], default="cl",
+        help="K 선택 단계의 Ψ 추정 데이터. cl=정직(논문 부록, 기본), "
+        "val=구버전 circular(Ψ·채점 모두 val → 과적합). test 성능 비교용으로만 val 제공.",
     )
     args = parser.parse_args()
 
@@ -348,4 +361,5 @@ if __name__ == "__main__":
         assignment=args.assignment,
         embedding_model=args.embedding_model,
         psi_source=args.psi_source,
+        k_select_psi=args.k_select_psi,
     )
