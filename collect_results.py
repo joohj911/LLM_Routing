@@ -66,7 +66,31 @@ def load_result(json_path: str, embedding: str = "default") -> dict:
         "weak_model": data["weak_model"],
         "strong_model": data["strong_model"],
         "df": df,
+        "per_category": data.get("per_category", {}),
+        "per_category_pass_drop": data.get("per_category_pass_drop", None),
     }
+
+
+def _iter_percategory_rows(entries: list[dict]):
+    """Per-Category 시트/CSV용 평탄화된 행 생성기."""
+    for e in entries:
+        for method, block in (e.get("per_category") or {}).items():
+            op = block.get("operating_point", {})
+            for r in block.get("categories", []):
+                yield {
+                    "Pair": e["label"],
+                    "Embedding": e["embedding"],
+                    "Method": method,
+                    "Op Weak (%)": op.get("weak_pct"),
+                    "Op Pass (%)": op.get("pass_pct"),
+                    "Category": r["category"],
+                    "n": r["n"],
+                    "Weak-only (%)": r["weak_acc"],
+                    "Strong-only (%)": r["strong_acc"],
+                    "→Weak sent (%)": r["weak_sent_pct"],
+                    "Router pass (%)": r["router_pass"],
+                    "Regret (pp)": r["regret"],
+                }
 
 
 def _parse_entry(entry: str) -> tuple[str, str]:
@@ -223,6 +247,42 @@ def write_sheet2(wb, entries: list[dict]):
         ws.column_dimensions[col[0].column_letter].width = max_len + 4
 
 
+def write_sheet_percategory(wb, entries: list[dict]):
+    rows = list(_iter_percategory_rows(entries))
+    if not rows:
+        return  # older eval_results.json without per_category → skip sheet
+    ws = wb.create_sheet("Per-Category")
+
+    drop = next((e.get("per_category_pass_drop") for e in entries
+                 if e.get("per_category_pass_drop") is not None), 1.0)
+    ws.append([f"Operating point: max pass-rate drop ≤ {drop:.1f}%p below strong-only "
+               f"(weak sent as high as possible). Regret = strong-only − router pass."])
+    note_cols = 12
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=note_cols)
+    ws.cell(row=1, column=1).font = Font(italic=True)
+
+    headers = list(rows[0].keys())
+    ws.append(headers)
+    _header_style(ws, 2, len(headers))
+
+    for r in rows:
+        excel_row = [r[h] for h in headers]
+        ws.append(excel_row)
+        # TOTAL 행은 굵게
+        if r["Category"] == "TOTAL":
+            for col in range(1, len(headers) + 1):
+                ws.cell(row=ws.max_row, column=col).font = Font(bold=True)
+
+    # Auto width from header + data rows only (skip the merged note row).
+    from openpyxl.utils import get_column_letter
+    for ci in range(1, len(headers) + 1):
+        max_len = max(
+            (len(str(ws.cell(row=ri, column=ci).value or "")) for ri in range(2, ws.max_row + 1)),
+            default=10,
+        )
+        ws.column_dimensions[get_column_letter(ci)].width = max_len + 3
+
+
 def write_sheet_graph(wb, png_path: str):
     ws = wb.create_sheet("Graphs")
     img = XLImage(png_path)
@@ -265,7 +325,15 @@ def write_csv_fallback(entries: list[dict], output_xlsx: str) -> list[str]:
     } for e in entries]
     pd.DataFrame(summary_rows).to_csv(summary_path, index=False)
 
-    return [curves_path, summary_path]
+    out = [curves_path, summary_path]
+
+    pc_rows = list(_iter_percategory_rows(entries))
+    if pc_rows:
+        pc_path = f"{base}_per_category.csv"
+        pd.DataFrame(pc_rows).to_csv(pc_path, index=False)
+        out.append(pc_path)
+
+    return out
 
 
 # ─────────────────────────────────────────────
@@ -301,6 +369,7 @@ def main():
 
         write_sheet1(wb, entries)
         write_sheet2(wb, entries)
+        write_sheet_percategory(wb, entries)
         write_sheet_graph(wb, png_path)
 
         wb.save(args.output)

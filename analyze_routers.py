@@ -79,7 +79,7 @@ def deferral_curve(scores, weak_pass, strong_pass, points=11):
 
 
 def analyze_one(name: str, scores: np.ndarray, df: pd.DataFrame,
-                weak_col: str, strong_col: str):
+                weak_col: str, strong_col: str, max_pass_drop: float = 1.0):
     weak_pass = df[weak_col].astype(bool).values
     strong_pass = df[strong_col].astype(bool).values
 
@@ -133,13 +133,21 @@ def analyze_one(name: str, scores: np.ndarray, df: pd.DataFrame,
     print("  분포 히스토그램:")
     print(text_histogram(scores))
 
-    # split별 평균 점수 (카테고리에 따라 점수가 달라지는가?)
+    # 카테고리(bfcl_split)별 라우팅 성공률 분해.
+    # 전역 운영점(pass ≥ strong-only − max_pass_drop%p)에서 라우터가 어떤 task를
+    # weak로 보내 이득/손해를 봤는지 본다.
     if "bfcl_split" in df.columns:
-        print("  split별 평균 점수:")
-        tmp = df.copy()
-        tmp["_score"] = scores
-        for split, g in tmp.groupby("bfcl_split"):
-            print(f"    {split:<34} mean={g['_score'].mean():.4f}  n={len(g)}")
+        from lm_routing.evals.per_category import (
+            format_breakdown_table,
+            per_category_breakdown,
+        )
+
+        summary, rows = per_category_breakdown(
+            df["bfcl_split"].values, scores, weak_pass, strong_pass,
+            max_pass_drop=max_pass_drop,
+        )
+        print("  카테고리별 라우팅 분해:")
+        print(format_breakdown_table(name, summary, rows))
 
     return {
         "name": name,
@@ -177,6 +185,9 @@ def main():
     ap.add_argument("--strong-model", default="Qwen/Qwen3.5-9B")
     ap.add_argument("--weak-model", default="Qwen/Qwen3.5-2B")
     ap.add_argument("--text-dim", type=int, default=384)
+    ap.add_argument("--max-pass-drop", type=float, default=1.0,
+                    help="카테고리별 분해 운영점: strong-only 대비 허용 pass 하락 %%p "
+                    "(기본 1.0 = 프로젝트 헤드라인 지표).")
     ap.add_argument("--save-scores", default=None,
                     help="설정 시 프롬프트별 점수를 이 CSV에 저장")
     args = ap.parse_args()
@@ -208,7 +219,7 @@ def main():
         )
         s = score_all(mf, prompts)
         score_cols[f"mf:{label}"] = s
-        summaries.append(analyze_one(f"MF [{label}]", s, df, args.weak_model, args.strong_model))
+        summaries.append(analyze_one(f"MF [{label}]", s, df, args.weak_model, args.strong_model, args.max_pass_drop))
 
     for label, path in _parse_labeled(args.uniroute_checkpoint):
         from lm_routing.routers.routers import UniRouteRouter
@@ -216,7 +227,7 @@ def main():
         uni = UniRouteRouter(checkpoint_path=path)
         s = score_all(uni, prompts)
         score_cols[f"uniroute:{label}"] = s
-        summaries.append(analyze_one(f"UniRoute [{label}]", s, df, args.weak_model, args.strong_model))
+        summaries.append(analyze_one(f"UniRoute [{label}]", s, df, args.weak_model, args.strong_model, args.max_pass_drop))
 
     for label, path in _parse_labeled(args.permodel_checkpoint):
         from lm_routing.routers.routers import PerModelRouter
@@ -224,7 +235,7 @@ def main():
         pm = PerModelRouter(checkpoint_path=path)
         s = score_all(pm, prompts)
         score_cols[f"permodel:{label}"] = s
-        summaries.append(analyze_one(f"PerModel [{label}]", s, df, args.weak_model, args.strong_model))
+        summaries.append(analyze_one(f"PerModel [{label}]", s, df, args.weak_model, args.strong_model, args.max_pass_drop))
 
     if not summaries:
         raise SystemExit("--mf-checkpoint 또는 --uniroute-checkpoint 중 하나는 필요합니다.")

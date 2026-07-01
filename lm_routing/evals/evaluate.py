@@ -234,6 +234,13 @@ if __name__ == "__main__":
     parser.add_argument("--num-results", type=int, default=10)
     parser.add_argument("--random-iters", type=int, default=10)
     parser.add_argument(
+        "--per-category-pass-drop",
+        type=float,
+        default=1.0,
+        help="Per-category breakdown operating point: max allowed pass-rate drop "
+        "below strong-only, in %%p (default 1.0 = project headline metric).",
+    )
+    parser.add_argument(
         "--output-json",
         type=str,
         default=None,
@@ -336,6 +343,39 @@ if __name__ == "__main__":
     if args.benchmark == "bfcl":
         print_bfcl_summary(all_results, benchmark, controller.model_pair)
 
+    # ── Per-category (BFCL split) breakdown at the headline operating point ──
+    per_category = {}
+    if args.benchmark == "bfcl" and "bfcl_split" in benchmark.all_data.columns:
+        from lm_routing.evals.per_category import (
+            format_breakdown_table,
+            per_category_breakdown,
+        )
+
+        splits = benchmark.all_data["bfcl_split"].values
+        weak_pass = benchmark.all_data[controller.model_pair.weak].astype(bool).values
+        strong_pass = benchmark.all_data[controller.model_pair.strong].astype(bool).values
+
+        sep = "=" * 90
+        print(f"\n{sep}\nPer-category routing (which task each router sends to weak, and its cost)\n{sep}")
+        for method in controller.routers:
+            # random is noise (no stable per-prompt score) → skip.
+            if method == "random":
+                continue
+            scores = benchmark.cache.get(method)
+            if scores is None:
+                continue
+            summary, rows = per_category_breakdown(
+                splits,
+                np.asarray(scores, dtype=float),
+                weak_pass,
+                strong_pass,
+                max_pass_drop=args.per_category_pass_drop,
+            )
+            per_category[str(method)] = {"operating_point": summary, "categories": rows}
+            print(format_breakdown_table(str(method), summary, rows))
+            print()
+        print(sep + "\n")
+
     if args.output_json:
         import json as _json
         weak_acc = benchmark.get_model_accuracy(controller.model_pair.weak)
@@ -348,6 +388,8 @@ if __name__ == "__main__":
             "results": all_results[["method", "threshold", "strong_percentage", "accuracy"]]
             .round(4)
             .to_dict(orient="records"),
+            "per_category_pass_drop": args.per_category_pass_drop,
+            "per_category": per_category,
         }
         with open(args.output_json, "w") as f:
             _json.dump(output_data, f, indent=2)
