@@ -159,11 +159,13 @@ def make_graphs(entries: list[dict], output_png: str, include_random: bool = Fal
                 lbl = METHOD_LABEL.get(method, method)
                 if multi_emb:
                     lbl = f"{lbl} · {e['embedding']}"
+                # random baseline은 항상 점선(대각선 기준선)으로. 나머지는 embedding별 선모양.
+                lstyle = style.get("linestyle", "--") if method == "random" else ls
                 ax.plot(
                     df_m["strong_percentage"], df_m["accuracy"],
                     label=lbl,
                     color=style.get("color", "black"),
-                    linestyle=ls,
+                    linestyle=lstyle,
                     linewidth=style.get("linewidth", 1.8),
                     marker=style.get("marker"),
                     markersize=4,
