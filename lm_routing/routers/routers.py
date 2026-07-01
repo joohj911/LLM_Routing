@@ -120,6 +120,15 @@ class UniRouteRouter(Router):
 
 
 @no_parallel
+class UniRouteTrainRouter(UniRouteRouter):
+    """UniRoute variant whose final Ψ is refit on the full train set (cl+val),
+    i.e. trained with --psi-source train. Behaviour is identical to
+    UniRouteRouter (it just loads whatever checkpoint it is given); this is a
+    separate class only so it can be registered under its own router name and
+    compared side-by-side against the val-Ψ variant on the test set."""
+
+
+@no_parallel
 class PerModelRouter(Router):
     """
     Per-model regression router (R2-Router 골격, budget 제거).
@@ -151,6 +160,7 @@ ROUTER_CLS = {
     "mf": MatrixFactorizationRouter,
     "random": RandomRouter,
     "uniroute": UniRouteRouter,
+    "uniroute_train": UniRouteTrainRouter,
     "permodel": PerModelRouter,
 }
 NAME_TO_CLS = {v: k for k, v in ROUTER_CLS.items()}

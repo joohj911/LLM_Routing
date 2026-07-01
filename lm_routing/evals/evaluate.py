@@ -226,6 +226,13 @@ if __name__ == "__main__":
         help="Shortcut: path to local .pt UniRoute checkpoint (sets uniroute.checkpoint_path in config)",
     )
     parser.add_argument(
+        "--uniroute-train-checkpoint",
+        type=str,
+        default=None,
+        help="Shortcut: path to a second UniRoute checkpoint trained with --psi-source train "
+        "(sets uniroute_train.checkpoint_path). Lets the val-Ψ and train-Ψ variants be compared on test.",
+    )
+    parser.add_argument(
         "--permodel-checkpoint",
         type=str,
         default=None,
@@ -265,6 +272,8 @@ if __name__ == "__main__":
             }
         if args.uniroute_checkpoint:
             config["uniroute"] = {"checkpoint_path": args.uniroute_checkpoint}
+        if args.uniroute_train_checkpoint:
+            config["uniroute_train"] = {"checkpoint_path": args.uniroute_train_checkpoint}
         if args.permodel_checkpoint:
             config["permodel"] = {"checkpoint_path": args.permodel_checkpoint}
         if not config:
