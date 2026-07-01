@@ -29,9 +29,12 @@ def max_weak_operating_point(
 ):
     """전역 운영점에서의 strong 선택 mask와 요약을 반환.
 
-    점수 내림차순으로 상위 k개를 strong에 보낼 때(= deferral curve와 동일 정의),
-    전체 pass율이 (strong-only − max_pass_drop%p) 이상으로 유지되는 가장 큰 weak
-    비율(= 가장 작은 k)을 찾는다.
+    배포 가능한 threshold 라우팅(evaluate.py deferral curve와 동일 의미)을 가정한다:
+    점수 t에 대해 score ≥ t 이면 strong. 따라서 **동점(tie) 점수는 항상 함께 이동**
+    하며, 하나의 컷으로 동점 블록을 반쪽만 보낼 수는 없다 (클러스터 기반 UniRoute처럼
+    점수가 뭉치는 라우터에서 중요). 후보 threshold(= 각 고유 점수, 그리고 전부 weak인
+    경우)를 모두 시도해, pass율이 (strong-only − max_pass_drop%p) 이상으로 유지되는
+    범위에서 weak 비율이 가장 큰 컷을 고른다.
 
     Returns:
         strong_mask (bool[n]) : True면 strong으로 라우팅
@@ -47,29 +50,29 @@ def max_weak_operating_point(
     strong_acc = sp.mean()
     target = strong_acc - max_pass_drop / 100.0
 
-    order = np.argsort(-scores, kind="stable")  # 높은 점수 = strong 우선
-    sp_o = sp[order].astype(np.int64)
-    wp_o = wp[order].astype(np.int64)
+    # 후보 컷: 각 고유 점수 t (score ≥ t → strong) + 최댓값 위(전부 weak).
+    # t를 올릴수록 strong이 줄고 weak가 는다. pass ≥ target을 지키며 weak 최대인 컷 선택.
+    uniq = np.unique(scores)
+    candidates = np.concatenate([uniq, [uniq[-1] + 1.0]])
 
-    # k = strong으로 보내는 상위 개수 (0..n).
-    # correct(k) = sum(strong_pass[top k]) + sum(weak_pass[나머지])
-    csum_sp = np.concatenate([[0], np.cumsum(sp_o)])   # csum_sp[k] = sp[:k].sum()
-    csum_wp = np.concatenate([[0], np.cumsum(wp_o)])   # csum_wp[k] = wp[:k].sum()
-    total_wp = int(wp_o.sum())
-    correct = csum_sp + (total_wp - csum_wp)            # 길이 n+1, index=k
-    passr = correct / n
+    best_mask = np.ones(n, dtype=bool)   # 기본값: 전부 strong (weak 0, pass=strong_acc)
+    best_weak = -1.0
+    best_pass = float(strong_acc)
+    for t in candidates:
+        strong_mask = scores >= t
+        passr = float(np.where(strong_mask, sp, wp).mean())
+        if passr >= target - 1e-12:
+            weak_frac = 1.0 - float(strong_mask.mean())
+            if weak_frac > best_weak:
+                best_weak = weak_frac
+                best_mask = strong_mask
+                best_pass = passr
 
-    # pass율이 target 이상인 가장 작은 k (= 최대 weak). k=n(전부 strong)은 항상 만족.
-    ok = np.where(passr >= target - 1e-12)[0]
-    k = int(ok.min()) if len(ok) else n
-
-    strong_mask = np.zeros(n, dtype=bool)
-    strong_mask[order[:k]] = True
     return (
-        strong_mask,
-        k / n * 100.0,
-        (n - k) / n * 100.0,
-        float(passr[k]) * 100.0,
+        best_mask,
+        float(best_mask.mean()) * 100.0,
+        best_weak * 100.0,
+        best_pass * 100.0,
     )
 
 
