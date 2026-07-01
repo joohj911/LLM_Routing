@@ -81,6 +81,7 @@ def _iter_percategory_rows(entries: list[dict]):
                     "Pair": e["label"],
                     "Embedding": e["embedding"],
                     "Method": method,
+                    "Weak@drop interp (%)": op.get("weak_pct_interp"),
                     "Op Weak (%)": op.get("weak_pct"),
                     "Op Pass (%)": op.get("pass_pct"),
                     "Category": r["category"],
@@ -255,9 +256,11 @@ def write_sheet_percategory(wb, entries: list[dict]):
 
     drop = next((e.get("per_category_pass_drop") for e in entries
                  if e.get("per_category_pass_drop") is not None), 1.0)
-    ws.append([f"Operating point: max pass-rate drop ≤ {drop:.1f}%p below strong-only "
-               f"(weak sent as high as possible). Regret = strong-only − router pass."])
-    note_cols = 12
+    ws.append([f"Operating point: max pass-rate drop ≤ {drop:.1f}%p below strong-only. "
+               f"'Weak@drop interp' = headline weak% at exactly that drop (linear interpolation on the "
+               f"deferral curve). 'Op Weak/Pass' = the deployable discrete cut used for the per-category "
+               f"decomposition below. Regret = strong-only − router pass."])
+    note_cols = len(rows[0])
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=note_cols)
     ws.cell(row=1, column=1).font = Font(italic=True)
 

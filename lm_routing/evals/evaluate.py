@@ -233,6 +233,8 @@ if __name__ == "__main__":
     )
     parser.add_argument("--num-results", type=int, default=10)
     parser.add_argument("--random-iters", type=int, default=10)
+    parser.add_argument("--seed", type=int, default=42,
+                        help="Random seed (reproducibility of the random router baseline)")
     parser.add_argument(
         "--per-category-pass-drop",
         type=float,
@@ -287,7 +289,7 @@ if __name__ == "__main__":
     all_results = pd.DataFrame()
     for router in controller.routers:
         # Ensure reproducibility on a per-router basis
-        random.seed(0)
+        random.seed(args.seed)
         # For non-deterministic routers like random, we average over multiple runs
         if router in ["random"]:
             router_results = []

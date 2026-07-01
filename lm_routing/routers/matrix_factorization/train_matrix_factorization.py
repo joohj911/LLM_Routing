@@ -250,7 +250,15 @@ if __name__ == "__main__":
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--val-ratio", type=float, default=0.05,
                         help="Fraction of train_data to use as internal validation set")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="Random seed for reproducibility (torch/numpy/python + val split)")
     args = parser.parse_args()
+
+    # Re-seed from --seed (module-level defaults were 42). Controls weight init,
+    # DataLoader shuffling, and the internal val split below.
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    random.seed(args.seed)
 
     # text_dim을 npy 차원에서 자동 추론 (e5-small=384, e5-large=1024).
     # 임베딩 모델을 바꿔도 차원 불일치 footgun 없이 동작.
@@ -275,7 +283,7 @@ if __name__ == "__main__":
     # bfcl_split(카테고리) 기준 stratified val split — 소형 카테고리(live_parallel 등)가
     # val에서 누락/편중되지 않도록 카테고리별 비율로 나눈다. bfcl_split 없으면 무작위 fallback.
     from collections import defaultdict
-    rng = random.Random(42)
+    rng = random.Random(args.seed)
     if all("bfcl_split" in s for s in filtered_data):
         buckets = defaultdict(list)
         for s in filtered_data:

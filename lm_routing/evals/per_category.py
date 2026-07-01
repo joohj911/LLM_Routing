@@ -76,6 +76,65 @@ def max_weak_operating_point(
     )
 
 
+def deferral_curve_points(
+    scores: Sequence[float],
+    weak_pass: Sequence[bool],
+    strong_pass: Sequence[bool],
+):
+    """배포 가능한 threshold 스윕의 (weak%, pass%) 곡선 점들을 반환.
+
+    각 고유 점수 t에 대해 score ≥ t → strong (동점은 함께 이동). evaluate.py의
+    deferral curve와 같은 의미지만, qcut 10분위가 아니라 **모든 컷**을 찍는다.
+    """
+    scores = np.asarray(scores, dtype=float)
+    wp = np.asarray(weak_pass, dtype=bool)
+    sp = np.asarray(strong_pass, dtype=bool)
+    if len(scores) == 0:
+        return np.array([0.0]), np.array([0.0])
+    uniq = np.unique(scores)
+    cuts = np.concatenate([uniq, [uniq[-1] + 1.0]])  # 마지막 = 전부 weak
+    weak = np.empty(len(cuts))
+    passr = np.empty(len(cuts))
+    for i, t in enumerate(cuts):
+        sm = scores >= t
+        weak[i] = 1.0 - sm.mean()
+        passr[i] = np.where(sm, sp, wp).mean()
+    return weak * 100.0, passr * 100.0
+
+
+def interp_weak_at_drop(
+    scores: Sequence[float],
+    weak_pass: Sequence[bool],
+    strong_pass: Sequence[bool],
+    max_pass_drop: float = 1.0,
+) -> float:
+    """pass = (strong-only − max_pass_drop%p) 인 지점의 weak%를 **선형 보간**으로.
+
+    이산 컷(특히 tie가 많은 라우터)은 정확히 그 pass에 닿는 컷이 없을 수 있으므로,
+    deferral curve 위에서 보간해 매끄러운 headline 값을 준다 (RouteLLM의 %calls
+    지표와 동일한 관행).
+    """
+    weak, passr = deferral_curve_points(scores, weak_pass, strong_pass)
+    strong_acc = float(np.asarray(strong_pass, dtype=bool).mean()) * 100.0
+    target = strong_acc - max_pass_drop
+
+    # weak를 늘려가며 pass가 target 밑으로 처음 내려가는 구간에서 보간(first crossing).
+    # 곡선이 비단조(라우터가 일부 구간에서 strong-only 초과)여도 안전하게 동작한다.
+    order = np.argsort(weak)
+    w, p = weak[order], passr[order]
+    below = np.where(p < target - 1e-12)[0]
+    if len(below) == 0:
+        return float(w[-1])   # 끝까지 target 유지 → 전부 weak 가능
+    j = int(below[0])
+    if j == 0:
+        return float(w[0])    # weak=0(=strong-only)도 target 미만 (drop<0일 때만)
+    w0, p0, w1, p1 = w[j - 1], p[j - 1], w[j], p[j]
+    if p0 == p1:
+        return float(w0)
+    frac = (p0 - target) / (p0 - p1)  # p0(≥target) → p1(<target)로 가며 target 도달점
+    return float(w0 + frac * (w1 - w0))
+
+
 def per_category_breakdown(
     splits: Sequence,
     scores: Sequence[float],
@@ -127,6 +186,11 @@ def per_category_breakdown(
         "weak_pct": round(weak_pct, 2),
         "pass_pct": round(pass_pct, 2),
         "max_pass_drop": max_pass_drop,
+        # Headline 지표: pass = strong-only − drop 지점의 weak%를 선형 보간으로.
+        # (위 weak_pct는 배포 가능한 이산 컷; 이 값은 곡선 위 보간값)
+        "weak_pct_interp": round(
+            interp_weak_at_drop(scores, wp, sp, max_pass_drop=max_pass_drop), 2
+        ),
     }
     return summary, rows
 
@@ -134,9 +198,10 @@ def per_category_breakdown(
 def format_breakdown_table(method: str, summary: dict, rows: list) -> str:
     """콘솔 출력용 문자열 표."""
     op = (
-        f"operating point: pass ≥ strong-only − {summary['max_pass_drop']:.1f}%p  "
-        f"→ weak={summary['weak_pct']:.0f}%  strong={summary['strong_pct']:.0f}%  "
-        f"pass={summary['pass_pct']:.1f}%"
+        f"operating point: pass ≥ strong-only − {summary['max_pass_drop']:.1f}%p\n"
+        f"      weak @drop (interp) = {summary.get('weak_pct_interp', float('nan')):.1f}%   |   "
+        f"deployable cut: weak={summary['weak_pct']:.0f}%  strong={summary['strong_pct']:.0f}%  "
+        f"pass={summary['pass_pct']:.1f}%  (분해는 이 컷 기준)"
     )
     lines = [f"  [{method}]  {op}"]
     lines.append(

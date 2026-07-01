@@ -36,6 +36,8 @@ UNIROUTE_ASSIGNMENT="hard"   # 기본 hard(최근접 클러스터). soft 쓰려�
 UNIROUTE_PSI="val"           # Ψ 추정 데이터: val(논문 설계, 기본) | train(전체 refit)
 MF_LR="3e-4"
 MF_WD="1e-5"
+SEED=42                       # 재현성: 모든 학습/split/random 라우터에 동일 seed
+GRAPH_RANDOM="--graph-random" # random baseline을 그래프에도 표시 (--no-graph-random로 끄기)
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -52,6 +54,8 @@ while [[ $# -gt 0 ]]; do
     --uniroute-psi)   UNIROUTE_PSI="$2"; shift 2 ;;
     --mf-lr)          MF_LR="$2"; shift 2 ;;
     --mf-weight-decay) MF_WD="$2"; shift 2 ;;
+    --seed)           SEED="$2"; shift 2 ;;
+    --no-graph-random) GRAPH_RANDOM=""; shift ;;
     *) echo "[error] Unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -152,7 +156,8 @@ python lm_routing/routers/matrix_factorization/prepare_bfcl_data.py convert \
   --prompts-path "${BFCL_DIR}/prompts.json" \
   --output-dir   "${DATA_0_8B}" \
   --weak-model   "${WEAK_0_8B}" \
-  --strong-model "${STRONG}"
+  --strong-model "${STRONG}" \
+  --seed         "${SEED}"
 
 echo "  Pair B: ${WEAK_2B} vs ${STRONG} → ${DATA_2B}/"
 python lm_routing/routers/matrix_factorization/prepare_bfcl_data.py convert \
@@ -160,7 +165,8 @@ python lm_routing/routers/matrix_factorization/prepare_bfcl_data.py convert \
   --prompts-path "${BFCL_DIR}/prompts.json" \
   --output-dir   "${DATA_2B}" \
   --weak-model   "${WEAK_2B}" \
-  --strong-model "${STRONG}"
+  --strong-model "${STRONG}" \
+  --seed         "${SEED}"
 
 # ─────────────────────────────────────────────
 # Step 4: Train MF router for each pair
@@ -173,6 +179,7 @@ python lm_routing/routers/matrix_factorization/train_matrix_factorization.py \
   --train-data   "${DATA_0_8B}/train_data.json" \
   --npy-path     "${BFCL_DIR}/embeddings.npy" \
   --output-path  "${DATA_0_8B}/mf_model.pt" \
+  --seed "${SEED}" \
   --embedding-model "${EMB_MODEL}" \
   --lr "${MF_LR}" \
   --weight-decay "${MF_WD}" \
@@ -185,6 +192,7 @@ python lm_routing/routers/matrix_factorization/train_matrix_factorization.py \
   --train-data   "${DATA_2B}/train_data.json" \
   --npy-path     "${BFCL_DIR}/embeddings.npy" \
   --output-path  "${DATA_2B}/mf_model.pt" \
+  --seed "${SEED}" \
   --embedding-model "${EMB_MODEL}" \
   --lr "${MF_LR}" \
   --weight-decay "${MF_WD}" \
@@ -203,6 +211,7 @@ python lm_routing/routers/uniroute/train_uniroute.py \
   --train-data   "${DATA_0_8B}/train_data.json" \
   --npy-path     "${BFCL_DIR}/embeddings.npy" \
   --output-path  "${DATA_0_8B}/uniroute_model.pt" \
+  --seed         "${SEED}" \
   --weak-model   "${WEAK_0_8B}" \
   --strong-model "${STRONG}" \
   --assignment   "${UNIROUTE_ASSIGNMENT}" \
@@ -214,6 +223,7 @@ python lm_routing/routers/uniroute/train_uniroute.py \
   --train-data   "${DATA_2B}/train_data.json" \
   --npy-path     "${BFCL_DIR}/embeddings.npy" \
   --output-path  "${DATA_2B}/uniroute_model.pt" \
+  --seed         "${SEED}" \
   --weak-model   "${WEAK_2B}" \
   --strong-model "${STRONG}" \
   --assignment   "${UNIROUTE_ASSIGNMENT}" \
@@ -226,6 +236,7 @@ python lm_routing/routers/per_model/train_per_model.py \
   --train-data   "${DATA_0_8B}/train_data.json" \
   --npy-path     "${BFCL_DIR}/embeddings.npy" \
   --output-path  "${DATA_0_8B}/permodel_model.pt" \
+  --seed         "${SEED}" \
   --weak-model   "${WEAK_0_8B}" \
   --strong-model "${STRONG}" \
   --embedding-model "${EMB_MODEL}"
@@ -235,6 +246,7 @@ python lm_routing/routers/per_model/train_per_model.py \
   --train-data   "${DATA_2B}/train_data.json" \
   --npy-path     "${BFCL_DIR}/embeddings.npy" \
   --output-path  "${DATA_2B}/permodel_model.pt" \
+  --seed         "${SEED}" \
   --weak-model   "${WEAK_2B}" \
   --strong-model "${STRONG}" \
   --embedding-model "${EMB_MODEL}"
@@ -262,6 +274,7 @@ python -m lm_routing.evals.evaluate \
   --num-results       "${NUM_RESULTS}" \
   --random-iters      "${RANDOM_ITERS}" \
   --overwrite-cache   mf uniroute permodel \
+  --seed              "${SEED}" \
   --output-json       "${RESULT_0_8B}/eval_results.json"
 
 echo "  Pair B → ${RESULT_2B}/eval_results.json"
@@ -277,6 +290,7 @@ python -m lm_routing.evals.evaluate \
   --num-results       "${NUM_RESULTS}" \
   --random-iters      "${RANDOM_ITERS}" \
   --overwrite-cache   mf uniroute permodel \
+  --seed              "${SEED}" \
   --output-json       "${RESULT_2B}/eval_results.json"
 
 # ─────────────────────────────────────────────
@@ -288,7 +302,7 @@ python collect_results.py \
   --results-jsons \
     "${RESULT_0_8B}/eval_results.json" \
     "${RESULT_2B}/eval_results.json" \
-  --output "${OUTPUT_EXCEL}"
+  --output "${OUTPUT_EXCEL}" ${GRAPH_RANDOM}
 
 echo ""
 echo "============================================================"
