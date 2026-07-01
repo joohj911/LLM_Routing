@@ -11,7 +11,7 @@ UniRoute K-Means 라우터 학습 스크립트.
 
 학습 절차:
   1. train_data.json → 80%(cluster_train) / 20%(val) stratified split
-  2. cluster_train 임베딩으로 K-Means 학습  (K 후보 sweep, 상한 ≈ Nval/10)
+  2. cluster_train 임베딩으로 K-Means 학습  (K 후보 sweep, 상한 100)
   3. K 선택(정직화): 각 K에서 Ψ를 cluster_train에서 추정하고 held-out val의 deferral
      AUC로 평가 → 최적 K. (Ψ를 val에서 추정+같은 val로 선택하면 순환→과적합→단조증가)
   4. 최적 K로 최종 Ψ_weak[k], Ψ_strong[k] 계산 (psi_source대로: val=논문 최종설계 / train=refit)
@@ -201,18 +201,17 @@ def train_uniroute(
 
     print(f"  cluster_train: {len(cl_idx)} samples, val: {len(val_idx)} samples")
 
-    # K 후보. 상한은 **val 크기 기준**으로 제한: K 선택 AUC는 held-out val에서
-    # 재니, K가 커져 val 클러스터가 너무 잘게 쪼개지면(클러스터당 몇 개) AUC가
-    # 노이즈에 흔들린다. Nval/10 → val 클러스터당 평균 ~10개를 보장(논문 Nval/50
-    # 취지의 완화판). 사용자가 --k-candidates를 직접 주면 그 값 존중(단 n_cl 이내).
+    # K 후보. 상한 100 (넓게 스윕). 단 n_cl을 넘을 수 없음. K가 커지면 val 클러스터가
+    # 잘게 쪼개져 K 선택 AUC 노이즈/과적합 위험은 커지므로, K별 val AUC 곡선이 어디서
+    # peak인지 로그로 확인할 것. 사용자가 --k-candidates를 직접 주면 그 값 존중(n_cl 이내).
     n_cl = len(cl_idx)
     n_val = len(val_idx)
     if k_candidates is None:
-        k_cap = max(3, n_val // 10)
-        k_candidates = [3, 5, 8, 10, 13, 15, 20, 25, 30, 40, 50, k_cap]
+        k_cap = min(100, n_cl)
+        k_candidates = [3, 5, 8, 10, 13, 15, 20, 25, 30, 40, 50, 75, 100]
         k_candidates = sorted(set(k for k in k_candidates if k <= k_cap))
     k_candidates = [k for k in k_candidates if 2 <= k <= n_cl]
-    print(f"\nK candidates: {k_candidates}  (val={n_val}, cap≈Nval/10)")
+    print(f"\nK candidates: {k_candidates}  (val={n_val}, cap=100)")
 
     # ── psi_source: Ψ(클러스터별 error rate)를 어디서 추정할지 ──
     #   "val"  : KMeans는 cl에서 fit, Ψ는 held-out val에서 추정 (원 UniRoute 논문 설계, 기본값)
