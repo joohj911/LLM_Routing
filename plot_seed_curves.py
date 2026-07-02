@@ -197,19 +197,23 @@ def main():
     ap.add_argument("--output-prefix", default="seed_curves")
     ap.add_argument("--graph-random", action="store_true",
                     help="전체 그래프에 random baseline도 포함")
+    ap.add_argument("--figures", choices=["both", "all", "best"], default="both",
+                    help="어떤 그림을 만들지: both(기본) / all(전체 method) / best(고정 2개만)")
     args = ap.parse_args()
 
     pairs = load_runs(args.results_jsons)
 
     # (1) 전체 method 밴드
-    base = ["mf", "mf_tieweak", "uniroute", "uniroute_train", "uniroute_legacy"]
-    all_methods = (["random"] if args.graph_random else []) + base
-    _figure(pairs, lambda pair: all_methods, f"{args.output_prefix}_all.png",
-            "Seed-averaged deferral curves (mean ± 1 std)")
+    if args.figures in ("both", "all"):
+        base = ["mf", "mf_tieweak", "uniroute", "uniroute_train", "uniroute_legacy"]
+        all_methods = (["random"] if args.graph_random else []) + base
+        _figure(pairs, lambda pair: all_methods, f"{args.output_prefix}_all.png",
+                "Seed-averaged deferral curves (mean ± 1 std)")
 
     # (2) best: 고정 선택 (MF Router / UniRoute (K-Means)) + strong−drop 평균 weak% 표시
-    _figure_best(pairs, f"{args.output_prefix}_best.png",
-                 "MF Router vs UniRoute (K-Means) — mean ± 1 std")
+    if args.figures in ("both", "best"):
+        _figure_best(pairs, f"{args.output_prefix}_best.png",
+                     "MF Router vs UniRoute (K-Means) — mean ± 1 std")
 
 
 if __name__ == "__main__":
