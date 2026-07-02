@@ -36,7 +36,9 @@ UNIROUTE_ASSIGNMENT="hard"   # 기본 hard(최근접 클러스터). soft 쓰려�
 UNIROUTE_PSI="val"           # Ψ 추정 데이터: val(논문 설계, 기본) | train(전체 refit)
 MF_LR="3e-4"
 MF_WD="1e-5"
-SEED=42                       # 재현성: 모든 학습/split/random 라우터에 동일 seed
+SEED=42                       # 라우터 학습/평가 randomness seed (MF init, KMeans, random 라우터)
+SPLIT_SEED=42                 # train/test split seed. seed sweep 시 이걸 고정하면 test set·기준선이
+                              #   상수로 유지돼 band가 '라우터 변동'만 반영 (권장: 고정)
 GRAPH_RANDOM="--graph-random" # random baseline을 그래프에도 표시 (--no-graph-random로 끄기)
 
 while [[ $# -gt 0 ]]; do
@@ -55,6 +57,7 @@ while [[ $# -gt 0 ]]; do
     --mf-lr)          MF_LR="$2"; shift 2 ;;
     --mf-weight-decay) MF_WD="$2"; shift 2 ;;
     --seed)           SEED="$2"; shift 2 ;;
+    --split-seed)     SPLIT_SEED="$2"; shift 2 ;;
     --no-graph-random) GRAPH_RANDOM=""; shift ;;
     *) echo "[error] Unknown option: $1" >&2; exit 1 ;;
   esac
@@ -158,7 +161,7 @@ python lm_routing/routers/matrix_factorization/prepare_bfcl_data.py convert \
   --output-dir   "${DATA_0_8B}" \
   --weak-model   "${WEAK_0_8B}" \
   --strong-model "${STRONG}" \
-  --seed         "${SEED}"
+  --seed         "${SPLIT_SEED}"
 
 echo "  Pair B: ${WEAK_2B} vs ${STRONG} → ${DATA_2B}/"
 python lm_routing/routers/matrix_factorization/prepare_bfcl_data.py convert \
@@ -167,7 +170,7 @@ python lm_routing/routers/matrix_factorization/prepare_bfcl_data.py convert \
   --output-dir   "${DATA_2B}" \
   --weak-model   "${WEAK_2B}" \
   --strong-model "${STRONG}" \
-  --seed         "${SEED}"
+  --seed         "${SPLIT_SEED}"
 
 # ─────────────────────────────────────────────
 # Step 4: Train MF router for each pair
