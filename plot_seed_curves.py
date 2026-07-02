@@ -136,23 +136,58 @@ def _figure(pairs, methods_for, out_png, title):
     print(f"Saved → {out_png}")
 
 
-def best_variants(P, include_random=True):
-    """각 family(MF / UniRoute)에서 weak@drop seed평균이 가장 큰 method 선택."""
-    def fam_best(prefixes):
-        cands = [m for m in P["weak_at_drop"] if any(m == p or m.startswith(p) for p in prefixes)]
-        cands = [m for m in cands if P["weak_at_drop"][m]]
-        if not cands:
-            return None
-        return max(cands, key=lambda m: np.mean(P["weak_at_drop"][m]))
-    chosen = []
-    mf = fam_best(["mf"])          # mf, mf_tieweak
-    uni = fam_best(["uniroute"])   # uniroute, uniroute_train, uniroute_legacy
-    for m in (mf, uni):
-        if m:
-            chosen.append(m)
-    if include_random and "random" in P["methods"]:
-        chosen.append("random")
-    return chosen
+# best 그래프에 고정으로 보여줄 (method, legend 라벨)
+FIXED_BEST = [
+    ("mf", "MF Router"),                 # tie→strong
+    ("uniroute_train", "UniRoute (K-Means)"),  # honest K, Ψ=train
+]
+
+
+def _figure_best(pairs, out_png, title):
+    """고정 선택(MF tie→strong / UniRoute honest·Ψ=train) 밴드 그래프.
+    strong−drop%p 에서의 평균 weak% 를 마커+주석으로 표시하고 콘솔에도 출력."""
+    plist = list(pairs.keys())
+    fig, axes = plt.subplots(1, len(plist), figsize=(7 * len(plist), 5.5))
+    if len(plist) == 1:
+        axes = [axes]
+    for ax, pair in zip(axes, plist):
+        P = pairs[pair]
+        wk = float(np.mean(P["weak"])); sg = float(np.mean(P["strong"])); drop = P["drop"]
+        print(f"\n[{pair}]  weak@(strong−{drop:.0f}%p) average weak model %:")
+        for method, label in FIXED_BEST:
+            if method not in P["methods"]:
+                continue
+            arr = np.vstack(P["methods"][method]); mean = arr.mean(0); std = arr.std(0)
+            st = METHOD_STYLE.get(method, {}); color = st.get("color", "black")
+            wd = P["weak_at_drop"].get(method, [])
+            wtxt = ""
+            if wd:
+                wmean = float(np.mean(wd)); wstd = float(np.std(wd))
+                wtxt = f"  (weak@−{drop:.0f}%p: {wmean:.1f}±{wstd:.1f}%)"
+                print(f"    {label:<22} {wmean:5.1f} ± {wstd:.1f} %   (n={len(wd)})")
+            ax.plot(GRID, mean, color=color, linewidth=2.2, linestyle="-",
+                    label=f"{label}{wtxt}")
+            ax.fill_between(GRID, mean - std, mean + std, color=color, alpha=0.15, linewidth=0)
+            for edge in (mean - std, mean + std):
+                ax.plot(GRID, edge, color=color, linewidth=0.7, linestyle=(0, (1, 3)), alpha=0.6)
+            # strong−drop%p 에서의 평균 weak% 지점 표시 (x = 100 − weak%)
+            if wd:
+                x = 100.0 - wmean
+                ax.plot([x], [sg - drop], marker="o", color=color, markersize=7, zorder=5)
+                ax.annotate(f"{wmean:.1f}%", (x, sg - drop),
+                            textcoords="offset points", xytext=(5, 6),
+                            fontsize=10, fontweight="bold", color=color)
+        # random 대각선 기준선
+        rs = METHOD_STYLE.get("random", {})
+        ax.plot([0, 100], [wk, sg], color=rs.get("color", "#888888"),
+                linestyle="--", linewidth=1.3, label="Random (diagonal)")
+        _refs(ax, P)
+        _finish(ax, pair)
+    fig.suptitle(title, fontsize=13)
+    plt.tight_layout()
+    plt.savefig(out_png, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"\nSaved → {out_png}")
 
 
 def main():
@@ -172,10 +207,9 @@ def main():
     _figure(pairs, lambda pair: all_methods, f"{args.output_prefix}_all.png",
             "Seed-averaged deferral curves (mean ± 1 std)")
 
-    # (2) best-only: pair별 최고 MF + 최고 UniRoute (+ random)
-    _figure(pairs, lambda pair: best_variants(pairs[pair]),
-            f"{args.output_prefix}_best.png",
-            "Best MF vs best UniRoute per pair (mean ± 1 std)")
+    # (2) best: 고정 선택 (MF Router / UniRoute (K-Means)) + strong−drop 평균 weak% 표시
+    _figure_best(pairs, f"{args.output_prefix}_best.png",
+                 "MF Router vs UniRoute (K-Means) — mean ± 1 std")
 
 
 if __name__ == "__main__":
