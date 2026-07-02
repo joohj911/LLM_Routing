@@ -156,6 +156,8 @@ def make_graphs(entries: list[dict], output_png: str, include_random: bool = Fal
             df = e["df"]
             ls = emb_ls[e["embedding"]]
             for method in methods:
+                if method == "random":
+                    continue  # 아래에서 weak→strong 대각선 기준선으로
                 df_m = df[df["method"] == method].sort_values("strong_percentage")
                 if df_m.empty:
                     continue
@@ -163,17 +165,21 @@ def make_graphs(entries: list[dict], output_png: str, include_random: bool = Fal
                 lbl = METHOD_LABEL.get(method, method)
                 if multi_emb:
                     lbl = f"{lbl} · {e['embedding']}"
-                # random baseline은 항상 점선(대각선 기준선)으로. 나머지는 embedding별 선모양.
-                lstyle = style.get("linestyle", "--") if method == "random" else ls
                 ax.plot(
                     df_m["strong_percentage"], df_m["accuracy"],
                     label=lbl,
                     color=style.get("color", "black"),
-                    linestyle=lstyle,
+                    linestyle=ls,
                     linewidth=style.get("linewidth", 1.8),
                     marker=style.get("marker"),
                     markersize=4,
                 )
+
+        # random의 기대 곡선은 weak→strong 직선 → 대각선 기준선 하나로 표시
+        if "random" in methods:
+            rs = METHOD_STYLE.get("random", {})
+            ax.plot([0, 100], [weak_acc, strong_acc], color=rs.get("color", "#888888"),
+                    linestyle="--", linewidth=1.3, label="Random (diagonal)")
 
         ax.axhline(weak_acc, color="#555555", linestyle=":", linewidth=1.0,
                    label=f"Weak only ({weak_acc:.1f}%)")

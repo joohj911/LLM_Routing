@@ -115,9 +115,18 @@ def _figure(pairs, methods_for, out_png, title):
         axes = [axes]
     for ax, pair in zip(axes, plist):
         P = pairs[pair]
-        for method in methods_for(pair):
+        sel = methods_for(pair)
+        for method in sel:
+            if method == "random":
+                continue  # 아래에서 대각선 기준선으로
             if method in P["methods"]:
                 _draw(ax, method, P["methods"][method])
+        # random은 기대 곡선이 weak→strong 직선이라 대각선 기준선으로 표시
+        if "random" in sel:
+            wk = float(np.mean(P["weak"])); sg = float(np.mean(P["strong"]))
+            st = METHOD_STYLE.get("random", {})
+            ax.plot([0, 100], [wk, sg], color=st.get("color", "#888888"),
+                    linestyle="--", linewidth=1.3, label="Random (diagonal)")
         _refs(ax, P)
         _finish(ax, pair)
     fig.suptitle(title, fontsize=13)
