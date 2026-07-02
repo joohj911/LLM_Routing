@@ -135,7 +135,7 @@ def main():
     tr_i = torch.as_tensor(perm[n_val:], dtype=torch.long)
 
     head = build_head(in_dim, args.hidden, args.out_dim).to(device)
-    desc = nn.Parameter(torch.randn(2, args.out_dim) * 0.1)  # 학습가능 expert descriptor
+    desc = nn.Parameter((torch.randn(2, args.out_dim) * 0.1).to(device))  # 학습가능 expert descriptor
     opt = torch.optim.Adam(list(head.parameters()) + [desc], lr=args.lr, weight_decay=args.weight_decay)
 
     X = X.to(device)
