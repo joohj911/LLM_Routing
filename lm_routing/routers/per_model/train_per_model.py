@@ -24,10 +24,40 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+from sklearn.cluster import KMeans
 from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
+
+
+def cluster_psi(embs: np.ndarray, y_weak: np.ndarray, y_strong: np.ndarray, K: int, seed: int):
+    """UniRoute식 클러스터별 pass율. 반환: (centroids(K,D), psi_weak(K,), psi_strong(K,))."""
+    km = KMeans(n_clusters=K, random_state=seed, n_init=10).fit(embs)
+    lab = km.labels_
+    psi_w = np.full(K, 0.5, dtype=np.float32)
+    psi_s = np.full(K, 0.5, dtype=np.float32)
+    for k in range(K):
+        m = lab == k
+        if m.any():
+            psi_w[k] = float(y_weak[m].mean())
+            psi_s[k] = float(y_strong[m].mean())
+    return km.cluster_centers_.astype(np.float32), psi_w, psi_s
+
+
+def assign_clusters(embs: np.ndarray, centroids: np.ndarray) -> np.ndarray:
+    """각 임베딩을 최근접 centroid에 배정."""
+    d = ((embs[:, None, :] - centroids[None, :, :]) ** 2).sum(axis=2)
+    return d.argmin(axis=1)
+
+
+def augment_with_clusters(embs: np.ndarray, centroids: np.ndarray,
+                          psi_weak: np.ndarray, psi_strong: np.ndarray) -> np.ndarray:
+    """임베딩에 [ψ_weak[k], ψ_strong[k]] (그 프롬프트가 속한 클러스터의 pass율) 2개 feature 추가."""
+    lab = assign_clusters(embs, centroids)
+    return np.concatenate(
+        [embs, psi_weak[lab][:, None], psi_strong[lab][:, None]], axis=1
+    ).astype(np.float32)
 
 
 class _Constant:
@@ -88,6 +118,7 @@ def train_per_model(
     train_ratio: float = 0.8,
     seed: int = 42,
     embedding_model: str = "intfloat/multilingual-e5-small",
+    cluster_features: int = 0,
 ) -> dict:
     print(f"\nLoading train data from {train_data_path}")
     df = pd.read_json(train_data_path)
@@ -111,33 +142,46 @@ def train_per_model(
     except ValueError:
         cl, val = train_test_split(idx, train_size=train_ratio, random_state=seed)
 
-    wclf = fit_regressor(X[cl], y_weak[cl], regressor, reg_C)
-    sclf = fit_regressor(X[cl], y_strong[cl], regressor, reg_C)
-    val_scores = (_proba(sclf, X[val]) - _proba(wclf, X[val]) + 1.0) / 2.0
+    # ── (옵션) UniRoute 클러스터 pass율을 feature로 주입 ──
+    #   cl에서 클러스터 fit·ψ 추정 → cl/val feature 증강 (val AUC 보고용).
+    if cluster_features and cluster_features > 0:
+        c_cl, pw_cl, ps_cl = cluster_psi(X[cl], y_weak[cl], y_strong[cl], cluster_features, seed)
+        Xtr = augment_with_clusters(X[cl], c_cl, pw_cl, ps_cl)
+        Xvl = augment_with_clusters(X[val], c_cl, pw_cl, ps_cl)
+        print(f"  cluster-features K={cluster_features}: feature dim {X.shape[1]} → {Xtr.shape[1]}")
+    else:
+        Xtr, Xvl = X[cl], X[val]
+
+    wclf = fit_regressor(Xtr, y_weak[cl], regressor, reg_C)
+    sclf = fit_regressor(Xtr, y_strong[cl], regressor, reg_C)
+    val_scores = (_proba(sclf, Xvl) - _proba(wclf, Xvl) + 1.0) / 2.0
     auc = deferral_auc(val_scores, y_weak[val].astype(bool), y_strong[val].astype(bool))
     print(f"  cl={len(cl)} val={len(val)} → val deferral AUC = {auc:.5f}")
-    print(f"  mean P_weak={_proba(wclf, X[val]).mean():.3f}  "
-          f"mean P_strong={_proba(sclf, X[val]).mean():.3f}")
+    print(f"  mean P_weak={_proba(wclf, Xvl).mean():.3f}  "
+          f"mean P_strong={_proba(sclf, Xvl).mean():.3f}")
 
-    # ── 최종: 전체 train 으로 재학습 ──
-    weak_clf = fit_regressor(X, y_weak, regressor, reg_C)
-    strong_clf = fit_regressor(X, y_strong, regressor, reg_C)
+    # ── 최종: 전체 train 으로 재학습 (클러스터도 전체 train으로 refit) ──
+    ckpt = {
+        "weak_model": weak_model,
+        "strong_model": strong_model,
+        "regressor": regressor,
+        "reg_C": reg_C,
+        "val_auc": auc,
+        "embedding_model": embedding_model,
+        "embedding_prefix": "query: ",
+        "cluster_features": int(cluster_features or 0),
+    }
+    if cluster_features and cluster_features > 0:
+        centroids, psi_w, psi_s = cluster_psi(X, y_weak, y_strong, cluster_features, seed)
+        Xfull = augment_with_clusters(X, centroids, psi_w, psi_s)
+        ckpt.update({"centroids": centroids, "psi_weak": psi_w, "psi_strong": psi_s})
+    else:
+        Xfull = X
+    ckpt["weak_clf"] = fit_regressor(Xfull, y_weak, regressor, reg_C)
+    ckpt["strong_clf"] = fit_regressor(Xfull, y_strong, regressor, reg_C)
 
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    torch.save(
-        {
-            "weak_clf": weak_clf,
-            "strong_clf": strong_clf,
-            "weak_model": weak_model,
-            "strong_model": strong_model,
-            "regressor": regressor,
-            "reg_C": reg_C,
-            "val_auc": auc,
-            "embedding_model": embedding_model,
-            "embedding_prefix": "query: ",
-        },
-        output_path,
-    )
+    torch.save(ckpt, output_path)
     print(f"Saved per-model router checkpoint → {output_path}\n")
     return {"val_auc": auc}
 
@@ -156,6 +200,9 @@ if __name__ == "__main__":
     p.add_argument("--train-ratio", type=float, default=0.8)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--embedding-model", type=str, default="intfloat/multilingual-e5-small")
+    p.add_argument("--cluster-features", type=int, default=0,
+                   help="0=off(순수 per-model). K>0이면 UniRoute식 KMeans(K)의 클러스터별 pass율"
+                   "(ψ_weak, ψ_strong)을 회귀 입력 feature로 추가 (per-model×UniRoute 융합).")
     args = p.parse_args()
 
     train_per_model(
@@ -169,4 +216,5 @@ if __name__ == "__main__":
         train_ratio=args.train_ratio,
         seed=args.seed,
         embedding_model=args.embedding_model,
+        cluster_features=args.cluster_features,
     )

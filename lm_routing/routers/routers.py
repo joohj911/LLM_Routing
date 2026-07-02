@@ -165,6 +165,15 @@ class PerModelRouter(Router):
         return self.model.predict(np.asarray(emb, dtype=np.float32))
 
 
+@no_parallel
+class PerModelClusterRouter(PerModelRouter):
+    """Per-model regression router whose quality predictor is augmented with
+    UniRoute-style per-cluster pass rates as input features (trained with
+    --cluster-features K > 0). Identical runtime path to PerModelRouter — the
+    cluster augmentation is driven by fields in the checkpoint; this is a
+    separate class only so it can be compared under its own router name."""
+
+
 ROUTER_CLS = {
     "mf": MatrixFactorizationRouter,
     "random": RandomRouter,
@@ -172,5 +181,6 @@ ROUTER_CLS = {
     "uniroute_train": UniRouteTrainRouter,
     "uniroute_legacy": UniRouteLegacyRouter,
     "permodel": PerModelRouter,
+    "permodel_cluster": PerModelClusterRouter,
 }
 NAME_TO_CLS = {v: k for k, v in ROUTER_CLS.items()}

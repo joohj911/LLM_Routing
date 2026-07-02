@@ -38,6 +38,7 @@ MF_LR="3e-4"
 MF_WD="1e-5"
 SEED=42                       # 재현성: 모든 학습/split/random 라우터에 동일 seed
 GRAPH_RANDOM="--graph-random" # random baseline을 그래프에도 표시 (--no-graph-random로 끄기)
+PMCLUSTER_K=20                # permodel_cluster: 회귀에 주입할 UniRoute 클러스터 수 (K)
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -56,6 +57,7 @@ while [[ $# -gt 0 ]]; do
     --mf-weight-decay) MF_WD="$2"; shift 2 ;;
     --seed)           SEED="$2"; shift 2 ;;
     --no-graph-random) GRAPH_RANDOM=""; shift ;;
+    --permodel-cluster-k) PMCLUSTER_K="$2"; shift 2 ;;
     *) echo "[error] Unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -307,6 +309,29 @@ python lm_routing/routers/per_model/train_per_model.py \
   --strong-model "${STRONG}" \
   --embedding-model "${EMB_MODEL}"
 
+# ── Per-model × UniRoute 융합: 클러스터 pass율을 회귀 feature로 주입 ──
+echo "  Pair A PerModel+cluster → ${DATA_0_8B}/permodel_cluster_model.pt"
+python lm_routing/routers/per_model/train_per_model.py \
+  --train-data   "${DATA_0_8B}/train_data.json" \
+  --npy-path     "${BFCL_DIR}/embeddings.npy" \
+  --output-path  "${DATA_0_8B}/permodel_cluster_model.pt" \
+  --seed         "${SEED}" \
+  --weak-model   "${WEAK_0_8B}" \
+  --strong-model "${STRONG}" \
+  --embedding-model "${EMB_MODEL}" \
+  --cluster-features "${PMCLUSTER_K}"
+
+echo "  Pair B PerModel+cluster → ${DATA_2B}/permodel_cluster_model.pt"
+python lm_routing/routers/per_model/train_per_model.py \
+  --train-data   "${DATA_2B}/train_data.json" \
+  --npy-path     "${BFCL_DIR}/embeddings.npy" \
+  --output-path  "${DATA_2B}/permodel_cluster_model.pt" \
+  --seed         "${SEED}" \
+  --weak-model   "${WEAK_2B}" \
+  --strong-model "${STRONG}" \
+  --embedding-model "${EMB_MODEL}" \
+  --cluster-features "${PMCLUSTER_K}"
+
 # ─────────────────────────────────────────────
 # Step 6: Evaluate all routers on test set
 # ─────────────────────────────────────────────
@@ -319,37 +344,39 @@ mkdir -p "${RESULT_0_8B}" "${RESULT_2B}"
 
 echo "  Pair A → ${RESULT_0_8B}/eval_results.json"
 python -m lm_routing.evals.evaluate \
-  --routers random mf uniroute uniroute_train uniroute_legacy permodel \
+  --routers random mf uniroute uniroute_train uniroute_legacy permodel permodel_cluster \
   --test-data         "${DATA_0_8B}/test_data.json" \
   --mf-checkpoint     "${DATA_0_8B}/mf_model.pt" \
   --uniroute-checkpoint "${DATA_0_8B}/uniroute_model.pt" \
   --uniroute-train-checkpoint "${DATA_0_8B}/uniroute_train_model.pt" \
   --uniroute-legacy-checkpoint "${DATA_0_8B}/uniroute_legacy_model.pt" \
   --permodel-checkpoint "${DATA_0_8B}/permodel_model.pt" \
+  --permodel-cluster-checkpoint "${DATA_0_8B}/permodel_cluster_model.pt" \
   --strong-model      "${STRONG}" \
   --weak-model        "${WEAK_0_8B}" \
   --output            "${RESULT_0_8B}" \
   --num-results       "${NUM_RESULTS}" \
   --random-iters      "${RANDOM_ITERS}" \
-  --overwrite-cache   mf uniroute uniroute_train uniroute_legacy permodel \
+  --overwrite-cache   mf uniroute uniroute_train uniroute_legacy permodel permodel_cluster \
   --seed              "${SEED}" \
   --output-json       "${RESULT_0_8B}/eval_results.json"
 
 echo "  Pair B → ${RESULT_2B}/eval_results.json"
 python -m lm_routing.evals.evaluate \
-  --routers random mf uniroute uniroute_train uniroute_legacy permodel \
+  --routers random mf uniroute uniroute_train uniroute_legacy permodel permodel_cluster \
   --test-data         "${DATA_2B}/test_data.json" \
   --mf-checkpoint     "${DATA_2B}/mf_model.pt" \
   --uniroute-checkpoint "${DATA_2B}/uniroute_model.pt" \
   --uniroute-train-checkpoint "${DATA_2B}/uniroute_train_model.pt" \
   --uniroute-legacy-checkpoint "${DATA_2B}/uniroute_legacy_model.pt" \
   --permodel-checkpoint "${DATA_2B}/permodel_model.pt" \
+  --permodel-cluster-checkpoint "${DATA_2B}/permodel_cluster_model.pt" \
   --strong-model      "${STRONG}" \
   --weak-model        "${WEAK_2B}" \
   --output            "${RESULT_2B}" \
   --num-results       "${NUM_RESULTS}" \
   --random-iters      "${RANDOM_ITERS}" \
-  --overwrite-cache   mf uniroute uniroute_train uniroute_legacy permodel \
+  --overwrite-cache   mf uniroute uniroute_train uniroute_legacy permodel permodel_cluster \
   --seed              "${SEED}" \
   --output-json       "${RESULT_2B}/eval_results.json"
 

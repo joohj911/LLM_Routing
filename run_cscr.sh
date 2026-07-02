@@ -28,6 +28,7 @@ SEED=42
 EPOCHS=100
 OUT_DIM=256
 HIDDEN=512
+PMCLUSTER_K=20   # permodel_cluster: 회귀에 주입할 UniRoute 클러스터 수
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -39,6 +40,7 @@ while [[ $# -gt 0 ]]; do
     --out-dim)       OUT_DIM="$2"; shift 2 ;;
     --hidden)        HIDDEN="$2"; shift 2 ;;
     --seed)          SEED="$2"; shift 2 ;;
+    --permodel-cluster-k) PMCLUSTER_K="$2"; shift 2 ;;
     *) echo "[error] Unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -107,19 +109,24 @@ for k in 0 1; do
     --train-data "${D}/train_data.json" --npy-path "${NPY}" \
     --output-path "${D}/permodel_cscr.pt" --weak-model "${WEAK}" --strong-model "${STRONG}" \
     --embedding-model "${EM}" --seed ${SEED}
+  python lm_routing/routers/per_model/train_per_model.py \
+    --train-data "${D}/train_data.json" --npy-path "${NPY}" \
+    --output-path "${D}/permodel_cluster_cscr.pt" --weak-model "${WEAK}" --strong-model "${STRONG}" \
+    --embedding-model "${EM}" --seed ${SEED} --cluster-features ${PMCLUSTER_K}
 
   echo "[3/3] Evaluate on test → ${R}/eval_results.json"
   python -m lm_routing.evals.evaluate \
-    --routers random mf uniroute uniroute_train uniroute_legacy permodel \
+    --routers random mf uniroute uniroute_train uniroute_legacy permodel permodel_cluster \
     --test-data                  "${D}/test_data.json" \
     --mf-checkpoint              "${D}/mf_cscr.pt" \
     --uniroute-checkpoint        "${D}/uniroute_cscr.pt" \
     --uniroute-train-checkpoint  "${D}/uniroute_train_cscr.pt" \
     --uniroute-legacy-checkpoint "${D}/uniroute_legacy_cscr.pt" \
     --permodel-checkpoint        "${D}/permodel_cscr.pt" \
+    --permodel-cluster-checkpoint "${D}/permodel_cluster_cscr.pt" \
     --strong-model "${STRONG}" --weak-model "${WEAK}" \
     --output "${R}" --num-results 10 --random-iters 10 \
-    --overwrite-cache mf uniroute uniroute_train uniroute_legacy permodel \
+    --overwrite-cache mf uniroute uniroute_train uniroute_legacy permodel permodel_cluster \
     --seed ${SEED} --output-json "${R}/eval_results.json"
 done
 
