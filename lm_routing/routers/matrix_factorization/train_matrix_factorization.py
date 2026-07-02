@@ -252,6 +252,10 @@ if __name__ == "__main__":
                         help="Fraction of train_data to use as internal validation set")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed for reproducibility (torch/numpy/python + val split)")
+    parser.add_argument("--tie-goes-to", choices=["weak", "strong"], default="strong",
+                        help="둘 다 fail(both-fail)인 프롬프트의 pairwise winner 라벨. "
+                        "strong=frontier 선호(convert 기본), weak=cost-aware(동점이면 싼 쪽). "
+                        "maxWeak 목표엔 weak가 유리할 수 있어 비교용으로 제공.")
     args = parser.parse_args()
 
     # Re-seed from --seed (module-level defaults were 42). Controls weight init,
@@ -270,6 +274,19 @@ if __name__ == "__main__":
     print(f"Embedding: {args.embedding_model}  (text_dim={text_dim})")
 
     data = json.load(open(args.train_data))
+
+    # both-fail(둘 다 오답) 프롬프트의 winner 라벨을 --tie-goes-to로 재설정.
+    # pass 여부는 모델 이름으로 키된 필드(s[model_a]=weak_pass, s[model_b]=strong_pass)에 있음.
+    tie_winner = "model_a" if args.tie_goes_to == "weak" else "model_b"
+    n_flip = 0
+    for s in data:
+        wa, wb = s.get("model_a"), s.get("model_b")
+        if wa in s and wb in s and (not s[wa]) and (not s[wb]):
+            if s.get("winner") != tie_winner:
+                n_flip += 1
+            s["winner"] = tie_winner
+    print(f"tie-goes-to={args.tie_goes_to}: both-fail → {tie_winner} ({n_flip} relabeled)")
+
     filtered_data = [
         s for s in data
         if s["winner"] in ["model_a", "model_b"] and s["model_a"] != s["model_b"]

@@ -72,19 +72,17 @@ compare_pair() {
   echo "############################################################"
   echo "# COMPARISON — pair ${pair_suffix}  (weak=${weak})"
   echo "############################################################"
-  local mf_args=() uni_args=() pm_args=() test_data=""
+  local mf_args=() uni_args=() test_data=""
   for TAG in "${TAGS[@]}"; do
     local dir="./bfcl_data_${TAG}_${pair_suffix}"
     [[ -z "$test_data" ]] && test_data="${dir}/test_data.json"
     mf_args+=("${TAG}=${dir}/mf_model.pt")
     uni_args+=("${TAG}=${dir}/uniroute_model.pt")
-    pm_args+=("${TAG}=${dir}/permodel_model.pt")
   done
   python analyze_routers.py \
     --test-data "${test_data}" \
     --mf-checkpoint "${mf_args[@]}" \
     --uniroute-checkpoint "${uni_args[@]}" \
-    --permodel-checkpoint "${pm_args[@]}" \
     --strong-model "${STRONG}" --weak-model "${weak}"
 }
 

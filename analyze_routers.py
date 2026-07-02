@@ -180,8 +180,6 @@ def main():
                     help="MF 체크포인트. 여러 개 가능. 'label=path' 형식으로 라벨 지정 가능.")
     ap.add_argument("--uniroute-checkpoint", nargs="+", default=None,
                     help="UniRoute 체크포인트. 여러 개 가능. 'label=path' 형식 가능.")
-    ap.add_argument("--permodel-checkpoint", nargs="+", default=None,
-                    help="Per-model 회귀 라우터 체크포인트. 여러 개 가능. 'label=path' 형식 가능.")
     ap.add_argument("--strong-model", default="Qwen/Qwen3.5-9B")
     ap.add_argument("--weak-model", default="Qwen/Qwen3.5-2B")
     ap.add_argument("--text-dim", type=int, default=384)
@@ -228,14 +226,6 @@ def main():
         s = score_all(uni, prompts)
         score_cols[f"uniroute:{label}"] = s
         summaries.append(analyze_one(f"UniRoute [{label}]", s, df, args.weak_model, args.strong_model, args.max_pass_drop))
-
-    for label, path in _parse_labeled(args.permodel_checkpoint):
-        from lm_routing.routers.routers import PerModelRouter
-        print(f"\nLoading Per-model router [{label}]: {path}")
-        pm = PerModelRouter(checkpoint_path=path)
-        s = score_all(pm, prompts)
-        score_cols[f"permodel:{label}"] = s
-        summaries.append(analyze_one(f"PerModel [{label}]", s, df, args.weak_model, args.strong_model, args.max_pass_drop))
 
     if not summaries:
         raise SystemExit("--mf-checkpoint 또는 --uniroute-checkpoint 중 하나는 필요합니다.")

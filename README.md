@@ -11,9 +11,9 @@ Two routing methods are compared across two model pairs:
 | Method | Description |
 |--------|-------------|
 | `random` | Random baseline — uniform routing at each threshold |
-| `mf` | Matrix Factorization router trained on pairwise pass/fail labels |
-| `uniroute` | UniRoute K-Means cluster-based router ([arXiv:2502.08773](https://arxiv.org/abs/2502.08773)) |
-| `permodel` | Per-model regression router — independent P(pass) regressors per model; routes by predicted gain P(strong)−P(weak) (R2-Router skeleton, budget-free) |
+| `mf` | Matrix Factorization router trained on pairwise pass/fail labels (both-fail labeled as a strong win; `--tie-goes-to strong`) |
+| `mf_tieweak` | Same MF, but both-fail prompts labeled as a weak win (`--tie-goes-to weak`) — cost-aware "prefer cheaper when neither is correct" |
+| `uniroute` | UniRoute K-Means cluster-based router ([arXiv:2502.08773](https://arxiv.org/abs/2502.08773)); variants `uniroute_train` (final Ψ on full train) and `uniroute_legacy` (legacy circular K selection) |
 
 **Model pairs evaluated:**
 - Pair A: `Qwen/Qwen3.5-0.8B` (weak) vs `Qwen/Qwen3.5-9B` (strong)
@@ -279,7 +279,7 @@ Implement the abstract `Router` class in `lm_routing/routers/routers.py` and add
 This project is a modified derivative of [RouteLLM](https://github.com/lm-sys/RouteLLM)
 (Apache-2.0). The matrix-factorization router builds on RouteLLM; substantial
 changes were made for tool-calling routing (BFCL evaluation, Qwen3.5 model pairs,
-local multilingual-e5 embeddings, UniRoute and per-model regression routers). See
+local multilingual-e5 embeddings, UniRoute cluster-based routers). See
 [`NOTICE`](./NOTICE) for attribution and [`LICENSE`](./LICENSE) for terms.
 
 ## Citation
