@@ -309,8 +309,7 @@ def run_batch_inference(
         output_ids = model.generate(
             **inputs,
             max_new_tokens=max_new_tokens,
-            do_sample=False,
-            temperature=1.0,
+            do_sample=False,  # greedy → 결정적(재현 가능) 생성
             pad_token_id=tokenizer.pad_token_id,
         )
 
@@ -567,8 +566,7 @@ def auto_batch_size(
             out = model.generate(
                 **enc,
                 max_new_tokens=max_new_tokens,
-                do_sample=False,
-                temperature=1.0,
+                do_sample=False,  # greedy → 결정적(재현 가능) 생성
                 pad_token_id=tokenizer.pad_token_id,
             )
         del enc, out
@@ -817,7 +815,15 @@ if __name__ == "__main__":
         "parsed_tool_calls, ground_truth, pass)를 이 JSON 경로에 저장. "
         "'왜 fail인지' 사후 추적용.",
     )
+    parser.add_argument("--seed", type=int, default=42,
+                        help="재현성 seed. 생성은 greedy(do_sample=False)라 결정적이며, "
+                        "이 seed는 transformers/torch 초기화를 고정한다.")
     args = parser.parse_args()
+
+    # 재현성: greedy 디코딩 + 전역 seed 고정
+    from transformers import set_seed
+    set_seed(args.seed)
+    torch.manual_seed(args.seed)
 
     with open(args.prompts_path) as f:
         prompts = json.load(f)

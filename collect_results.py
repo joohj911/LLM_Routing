@@ -181,6 +181,11 @@ def make_graphs(entries: list[dict], output_png: str, include_random: bool = Fal
                    label=f"Weak only ({weak_acc:.1f}%)")
         ax.axhline(strong_acc, color="#C62828", linestyle=":", linewidth=1.0,
                    label=f"Strong only ({strong_acc:.1f}%)")
+        # 헤드라인 운영점: strong-only − drop%p (기본 1%). 이 선 위쪽을 유지하며 weak를
+        # 최대한 보내는 게 목표 → 각 곡선이 이 선과 만나는 x가 곧 Weak@drop 지점.
+        drop = pair_entries[0].get("per_category_pass_drop") or 1.0
+        ax.axhline(strong_acc - drop, color="#C62828", linestyle=(0, (1, 3)), linewidth=0.9,
+                   label=f"Strong − {drop:.0f}%p ({strong_acc - drop:.1f}%)")
 
         ax.set_xlabel("Strong Model Calls (%)", fontsize=11)
         ax.set_ylabel("Pass Rate (%)", fontsize=11)

@@ -256,6 +256,9 @@ if __name__ == "__main__":
     parser.add_argument("--random-iters", type=int, default=10)
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed (reproducibility of the random router baseline)")
+    parser.add_argument("--quiet", action="store_true",
+                        help="per-threshold / per-category 상세 콘솔 출력 생략 "
+                        "(최종 요약·JSON·Excel 산출물은 그대로 유지). 터미널 정리용.")
     parser.add_argument(
         "--per-category-pass-drop",
         type=float,
@@ -347,8 +350,9 @@ if __name__ == "__main__":
             for threshold, accuracy, model_counts, total in benchmark.evaluate(
                 controller, router, args.num_results, False
             ):
-                print(f"Evaluating router: {router} with threshold {threshold}...")
-                pretty_print_results(threshold, accuracy, model_counts, total)
+                if not args.quiet:
+                    print(f"Evaluating router: {router} with threshold {threshold}...")
+                    pretty_print_results(threshold, accuracy, model_counts, total)
 
                 result = {
                     "method": str(router),
@@ -385,7 +389,8 @@ if __name__ == "__main__":
         strong_pass = benchmark.all_data[controller.model_pair.strong].astype(bool).values
 
         sep = "=" * 90
-        print(f"\n{sep}\nPer-category routing (which task each router sends to weak, and its cost)\n{sep}")
+        if not args.quiet:
+            print(f"\n{sep}\nPer-category routing (which task each router sends to weak, and its cost)\n{sep}")
         for method in controller.routers:
             # random is noise (no stable per-prompt score) → skip.
             if method == "random":
@@ -401,9 +406,11 @@ if __name__ == "__main__":
                 max_pass_drop=args.per_category_pass_drop,
             )
             per_category[str(method)] = {"operating_point": summary, "categories": rows}
-            print(format_breakdown_table(str(method), summary, rows))
-            print()
-        print(sep + "\n")
+            if not args.quiet:
+                print(format_breakdown_table(str(method), summary, rows))
+                print()
+        if not args.quiet:
+            print(sep + "\n")
 
     if args.output_json:
         import json as _json

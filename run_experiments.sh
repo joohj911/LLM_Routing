@@ -136,6 +136,7 @@ if [[ $SKIP_EVAL -eq 0 ]]; then
     --output-path  "${EVAL_RESULTS_JSON}" \
     --save-responses "${EVAL_RESPONSES_JSON}" \
     --models "${WEAK_0_8B}" "${WEAK_2B}" "${STRONG}" \
+    --seed "${SEED}" \
     ${LOAD_4BIT}
 else
   echo ""
@@ -359,6 +360,7 @@ python -m lm_routing.evals.evaluate \
   --random-iters      "${RANDOM_ITERS}" \
   --overwrite-cache   mf uniroute uniroute_train uniroute_legacy permodel permodel_cluster \
   --seed              "${SEED}" \
+  --quiet \
   --output-json       "${RESULT_0_8B}/eval_results.json"
 
 echo "  Pair B → ${RESULT_2B}/eval_results.json"
@@ -378,6 +380,7 @@ python -m lm_routing.evals.evaluate \
   --random-iters      "${RANDOM_ITERS}" \
   --overwrite-cache   mf uniroute uniroute_train uniroute_legacy permodel permodel_cluster \
   --seed              "${SEED}" \
+  --quiet \
   --output-json       "${RESULT_2B}/eval_results.json"
 
 # ─────────────────────────────────────────────

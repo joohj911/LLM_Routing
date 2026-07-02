@@ -127,7 +127,7 @@ for k in 0 1; do
     --strong-model "${STRONG}" --weak-model "${WEAK}" \
     --output "${R}" --num-results 10 --random-iters 10 \
     --overwrite-cache mf uniroute uniroute_train uniroute_legacy permodel permodel_cluster \
-    --seed ${SEED} --output-json "${R}/eval_results.json"
+    --seed ${SEED} --quiet --output-json "${R}/eval_results.json"
 done
 
 echo ""
