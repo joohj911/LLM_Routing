@@ -744,22 +744,42 @@ def evaluate_model(
         tools = build_tools(sample.get("function", []))
         items.append((sid, sample, msgs, tools))
 
+    # ── 길이 정렬 + 토큰-예산(token-budget) 배치 준비 ──────────────────────
+    # 프롬프트 길이가 제각각이라, 원래 순서로 고정 배치를 만들면 배치마다 긴 프롬프트가
+    # 섞여 패딩이 그 최장 길이로 부풀고 → 메모리가 튀어 OOM이 반복된다.
+    # 대신 (1) 토큰 길이로 정렬해 배치 안 길이를 균일하게 만들고, (2) "샘플 수"가 아니라
+    # "패딩된 총 토큰 수(=count×(maxlen+gen))"를 예산으로 잡는다. 짧은 프롬프트 배치는
+    # 자동으로 커지고(활용률↑), 최장 프롬프트 배치만 작아진다(OOM 회피).
+    lengths = [
+        len(tokenizer(_apply_template(tokenizer, m, t), add_special_tokens=False)["input_ids"])
+        for _, _, m, t in items
+    ]
+    order = sorted(range(len(items)), key=lambda k: lengths[k], reverse=True)  # 긴 것 먼저
+    items = [items[k] for k in order]
+    lengths = [lengths[k] for k in order]
+    L_max = lengths[0] if lengths else 1
+
     # batch_size=0 → GPU 메모리 기반 자동 탐지 (가장 긴 2개로 calibration).
-    # 짧은 샘플로 calibration하면 per_sample을 과소추정하므로 항상 최장 길이 기준.
+    # calibration은 최장 프롬프트에서 "안전 샘플 수 B"를 재고, 이를 최장 길이 기준
+    # 토큰 예산 T = B×(L_max+gen) 으로 환산한다. 이후 길이 L 배치의 샘플 수는
+    # c = T // (L+gen) 이 되어, 짧을수록 커지고 최장에서 정확히 B가 된다.
     if batch_size == 0:
-        all_texts = sorted(
-            (_apply_template(tokenizer, m, t) for _, _, m, t in items),
-            key=len, reverse=True,
-        )
+        calib = [_apply_template(tokenizer, m, t) for _, _, m, t in items[:2]]
         if dp_mode == "data_parallel":
-            # 각 replica는 GPU 1장 → per-GPU 배치를 재고 GPU 수만큼 곱해 전체 배치로.
-            per = auto_batch_size(replicas[0][0], tokenizer, all_texts[:2], max_new_tokens,
+            # 각 replica는 GPU 1장 → per-GPU 배치를 재고 GPU 수만큼 곱해 전체 예산으로.
+            per = auto_batch_size(replicas[0][0], tokenizer, calib, max_new_tokens,
                                   f"cuda:{gpu_indices[0]}", target_fraction=mem_fraction, cap=max_batch)
-            batch_size = per * len(replicas)
-            print(f"  data-parallel total batch = {per}/GPU × {len(replicas)} GPU = {batch_size}")
+            b_samples = per * len(replicas)
+            print(f"  data-parallel total batch = {per}/GPU × {len(replicas)} GPU = {b_samples}")
         else:
-            batch_size = auto_batch_size(replicas[0][0], tokenizer, all_texts[:2], max_new_tokens,
-                                         device, target_fraction=mem_fraction, cap=max_batch)
+            b_samples = auto_batch_size(replicas[0][0], tokenizer, calib, max_new_tokens,
+                                        device, target_fraction=mem_fraction, cap=max_batch)
+    else:
+        b_samples = batch_size  # 명시 배치 = 최장 프롬프트 기준 샘플 수로 해석
+
+    token_budget = max(1, b_samples) * (L_max + max_new_tokens)
+    print(f"  token-budget batching: B={b_samples}@L_max={L_max} → budget={token_budget} tok "
+          f"(+gen={max_new_tokens}); 짧은 배치는 최대 ~{token_budget // (min(lengths) + max_new_tokens) if lengths else b_samples} samples")
 
     def _process_batch(batch_items, responses):
         nonlocal debug_printed
@@ -799,16 +819,20 @@ def evaluate_model(
                 print(f"[debug] ground truth      : {ground_truth}")
                 print(f"[debug] → pass = {results[sid]}")
 
-    # Adaptive 배치 루프: OOM이 나면 batch_size를 절반으로 줄여 같은 지점을 재시도한다
-    # (샘플 1개씩 재시도로 떨어지지 않고, 이후 배치들도 줄어든 크기로 진행 → OOM 반복 방지).
-    cur_bs = max(1, batch_size)
-    init_bs = cur_bs           # 회복 상한(초기 auto/지정 배치)
+    # Adaptive 토큰-예산 루프: 남은 것 중 가장 긴 프롬프트(items는 길이 내림차순) 기준으로
+    # 예산에 맞는 샘플 수 c = budget // (L_head+gen) 를 뽑아 배치한다. OOM이 나면 예산을
+    # 절반으로 줄여(cascade) 같은 지점을 더 작은 배치로 재시도하고, 연속 성공하면 원래
+    # 예산까지 회복한다. 길이 정렬 덕에 배치 내 패딩 낭비가 최소화된다.
+    budget = max(L_max + max_new_tokens, token_budget)
+    init_budget = budget       # 회복 상한
     ok_streak = 0              # 연속 성공 배치 수 (회복 트리거)
-    RECOVER_AFTER = 20         # 이만큼 연속 성공하면 배치 ×2 (긴 프롬프트 스파이크 후 복구)
+    RECOVER_AFTER = 20         # 이만큼 연속 성공하면 예산 ×2 (긴 프롬프트 스파이크 후 복구)
     i = 0
     pbar = tqdm(total=len(items), desc=model_name, leave=True)
     while i < len(items):
-        batch_items = items[i : i + cur_bs]
+        L_head = lengths[i]  # 남은 것 중 최장 (내림차순이므로 배치의 최장 길이)
+        c = max(1, budget // (L_head + max_new_tokens))
+        batch_items = items[i : i + c]
         batch_inputs = [(m, t) for _, _, m, t in batch_items]
         try:
             responses = generate_sharded(replicas, batch_inputs, max_new_tokens)
@@ -820,15 +844,15 @@ def evaluate_model(
                     with torch.cuda.device(gi):
                         torch.cuda.empty_cache()
             ok_streak = 0
-            if cur_bs > 1:
-                new_bs = max(1, cur_bs // 2)
-                print(f"\n  [warn] batch@{i} ({len(batch_inputs)} samples) {type(e).__name__} "
-                      f"→ batch_size {cur_bs}→{new_bs}, retrying")
-                cur_bs = new_bs
-                continue  # 같은 i를 더 작은 배치로 재시도
+            if len(batch_items) > 1:
+                new_budget = max(L_head + max_new_tokens, budget // 2)
+                print(f"\n  [warn] batch@{i} ({len(batch_items)} samples, L_head={L_head}) "
+                      f"{type(e).__name__} → budget {budget}→{new_budget} tok, retrying")
+                budget = new_budget
+                continue  # 같은 i를 더 작은 예산으로 재시도
             # 단일 샘플조차 실패 → 그 샘플만 fail 처리하고 넘어감
             sid = batch_items[0][0]
-            print(f"\n  [error] single sample @{i} failed ({type(e).__name__}) — marking fail")
+            print(f"\n  [error] single sample @{i} (L={L_head}) failed ({type(e).__name__}) — marking fail")
             results[sid] = False
             failed_samples += 1
             i += 1
@@ -837,10 +861,10 @@ def evaluate_model(
         _process_batch(batch_items, responses)
         i += len(batch_items)
         pbar.update(len(batch_items))
-        # 회복: 줄었던 배치를 연속 성공 시 초기값까지 다시 키움 (영구 축소 방지)
+        # 회복: 줄었던 예산을 연속 성공 시 초기값까지 다시 키움 (영구 축소 방지)
         ok_streak += 1
-        if cur_bs < init_bs and ok_streak >= RECOVER_AFTER:
-            cur_bs = min(init_bs, cur_bs * 2)
+        if budget < init_budget and ok_streak >= RECOVER_AFTER:
+            budget = min(init_budget, budget * 2)
             ok_streak = 0
     pbar.close()
 
