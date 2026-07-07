@@ -28,6 +28,7 @@ import re
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 # 가변 길이 배치의 단편화(fragmentation) OOM 완화. torch import 전에 설정해야 적용됨.
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
@@ -621,6 +622,69 @@ def auto_batch_size(
 
 
 # ─────────────────────────────────────────────
+# 멀티 GPU (data-parallel) 로드/추론
+# ─────────────────────────────────────────────
+
+def load_replicas(model_name: str, gpu_indices: list, device: str, load_in_4bit: bool,
+                  allow_dp: bool = True):
+    """가능하면 GPU마다 모델을 복제(data-parallel), 아니면 device_map=auto 단일 사본.
+
+    반환: (replicas=[(model, tokenizer), ...], mode)
+      mode="data_parallel" : GPU 수만큼 복제 (배치를 쪼개 병렬 generate)
+      mode="single"        : 단일 사본 (CPU/4bit/단일 GPU/pinned)
+      mode="auto"          : 복제 실패(모델이 한 GPU에 안 들어감) → device_map=auto로
+                             모델을 여러 GPU에 분할한 단일 사본
+    """
+    if load_in_4bit or device == "cpu" or ":" in device or len(gpu_indices) <= 1 or not allow_dp:
+        m, tok = load_model(model_name, device, load_in_4bit)
+        return [(m, tok)], "single"
+
+    # data-parallel 시도: GPU 하나당 모델 하나
+    replicas = []
+    try:
+        for i in gpu_indices:
+            m, tok = load_model(model_name, f"cuda:{i}", load_in_4bit)
+            replicas.append((m, tok))
+        print(f"  data-parallel: {len(replicas)} replicas (one per GPU {gpu_indices})")
+        return replicas, "data_parallel"
+    except Exception as e:  # 대개 한 GPU에 안 들어가는 OOM
+        print(f"  [info] per-GPU replica load failed ({type(e).__name__}) — "
+              f"falling back to device_map=auto (model sharded across GPUs).")
+        for m, _ in replicas:
+            del m
+        for i in gpu_indices:
+            with torch.cuda.device(i):
+                torch.cuda.empty_cache()
+        m, tok = load_model(model_name, "cuda", load_in_4bit)  # auto: 모델을 여러 GPU에 분할
+        return [(m, tok)], "auto"
+
+
+def generate_sharded(replicas, batch_inputs, max_new_tokens):
+    """배치를 replica 수만큼 연속 청크로 나눠 각 GPU에서 스레드 병렬 generate 후 순서대로 합침.
+    replica가 1개면 단일 generate."""
+    n = len(replicas)
+    if n == 1:
+        return run_batch_inference(replicas[0][0], replicas[0][1], batch_inputs, max_new_tokens)
+    L = len(batch_inputs)
+    bounds = [(L * j) // n for j in range(n + 1)]
+    res_by_j = {}
+    with ThreadPoolExecutor(max_workers=n) as ex:
+        futs = {}
+        for j in range(n):
+            chunk = batch_inputs[bounds[j]:bounds[j + 1]]
+            if chunk:
+                futs[j] = ex.submit(
+                    run_batch_inference, replicas[j][0], replicas[j][1], chunk, max_new_tokens
+                )
+        for j, f in futs.items():
+            res_by_j[j] = f.result()  # 예외는 여기서 재발생 → 상위 OOM 처리로
+    responses = []
+    for j in range(n):
+        responses.extend(res_by_j.get(j, []))
+    return responses
+
+
+# ─────────────────────────────────────────────
 # 단일 모델 평가
 # ─────────────────────────────────────────────
 
@@ -637,13 +701,21 @@ def evaluate_model(
     trace_sink: list | None = None,
     mem_fraction: float = 0.9,
     max_batch: int = 256,
+    data_parallel: bool = True,
 ) -> tuple[dict[str, bool], str]:
     """한 모델을 전체 BFCL 샘플에 대해 배치 추론으로 평가하고 {id: pass} 딕셔너리 반환.
 
     trace_sink가 주어지면 샘플별 추적 레코드(raw 출력, 파싱 결과, 정답, pass)를
     append한다 (--save-responses 용).
     """
-    model, tokenizer = load_model(model_name, device, load_in_4bit)
+    gpu_indices = (
+        list(range(torch.cuda.device_count()))
+        if device == "cuda" and torch.cuda.is_available()
+        else []
+    )
+    replicas, dp_mode = load_replicas(model_name, gpu_indices, device, load_in_4bit,
+                                      allow_dp=data_parallel)
+    tokenizer = replicas[0][1]  # 템플릿 렌더링용 (모든 replica 동일)
 
     results = {}
     failed_samples = 0
@@ -679,8 +751,15 @@ def evaluate_model(
             (_apply_template(tokenizer, m, t) for _, _, m, t in items),
             key=len, reverse=True,
         )
-        batch_size = auto_batch_size(model, tokenizer, all_texts[:2], max_new_tokens, device,
-                                     target_fraction=mem_fraction, cap=max_batch)
+        if dp_mode == "data_parallel":
+            # 각 replica는 GPU 1장 → per-GPU 배치를 재고 GPU 수만큼 곱해 전체 배치로.
+            per = auto_batch_size(replicas[0][0], tokenizer, all_texts[:2], max_new_tokens,
+                                  f"cuda:{gpu_indices[0]}", target_fraction=mem_fraction, cap=max_batch)
+            batch_size = per * len(replicas)
+            print(f"  data-parallel total batch = {per}/GPU × {len(replicas)} GPU = {batch_size}")
+        else:
+            batch_size = auto_batch_size(replicas[0][0], tokenizer, all_texts[:2], max_new_tokens,
+                                         device, target_fraction=mem_fraction, cap=max_batch)
 
     def _process_batch(batch_items, responses):
         nonlocal debug_printed
@@ -732,9 +811,14 @@ def evaluate_model(
         batch_items = items[i : i + cur_bs]
         batch_inputs = [(m, t) for _, _, m, t in batch_items]
         try:
-            responses = run_batch_inference(model, tokenizer, batch_inputs, max_new_tokens)
+            responses = generate_sharded(replicas, batch_inputs, max_new_tokens)
         except Exception as e:
-            torch.cuda.empty_cache()
+            for gi in (gpu_indices or [None]):
+                if gi is None:
+                    torch.cuda.empty_cache()
+                else:
+                    with torch.cuda.device(gi):
+                        torch.cuda.empty_cache()
             ok_streak = 0
             if cur_bs > 1:
                 new_bs = max(1, cur_bs // 2)
@@ -762,9 +846,13 @@ def evaluate_model(
 
     # Explicitly release GPU memory before returning so the next model can load cleanly.
     # del must happen in this scope — a helper function's del only removes its local ref.
-    del model, tokenizer
+    for m, _ in replicas:
+        del m
+    del replicas, tokenizer
     if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+        for gi in (gpu_indices or [torch.cuda.current_device()]):
+            with torch.cuda.device(gi):
+                torch.cuda.empty_cache()
 
     n_pass = sum(results.values())
     print(f"\n{model_name}: {n_pass}/{len(results)} pass ({n_pass/max(len(results),1)*100:.1f}%)")
@@ -820,6 +908,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max-batch-size", type=int, default=256,
         help="auto batch 상한(기본 256).",
+    )
+    parser.add_argument(
+        "--no-data-parallel", action="store_true",
+        help="멀티 GPU data-parallel(각 GPU에 모델 복제 후 배치 분할) 끄기. "
+        "기본은 자동 활성(모델이 한 GPU에 들어가는 경우). 끄면 device_map=auto 단일 사본.",
     )
     parser.add_argument(
         "--limit",
@@ -887,6 +980,7 @@ if __name__ == "__main__":
         debug_n=args.debug,
         mem_fraction=args.mem_fraction,
         max_batch=args.max_batch_size,
+        data_parallel=not args.no_data_parallel,
     )
 
     all_model_results = {}  # model_name → {id: bool}
