@@ -701,7 +701,7 @@ def evaluate_model(
     trace_sink: list | None = None,
     mem_fraction: float = 0.9,
     max_batch: int = 256,
-    data_parallel: bool = True,
+    data_parallel: bool = False,
 ) -> tuple[dict[str, bool], str]:
     """한 모델을 전체 BFCL 샘플에 대해 배치 추론으로 평가하고 {id: pass} 딕셔너리 반환.
 
@@ -910,9 +910,10 @@ if __name__ == "__main__":
         help="auto batch 상한(기본 256).",
     )
     parser.add_argument(
-        "--no-data-parallel", action="store_true",
-        help="멀티 GPU data-parallel(각 GPU에 모델 복제 후 배치 분할) 끄기. "
-        "기본은 자동 활성(모델이 한 GPU에 들어가는 경우). 끄면 device_map=auto 단일 사본.",
+        "--data-parallel", action="store_true",
+        help="멀티 GPU data-parallel(각 GPU에 모델 복제 후 배치 분할)을 켠다. "
+        "기본은 OFF = device_map=auto 단일 사본(모델이 한 GPU에 올라가고 배치 효율이 높음). "
+        "주의: autoregressive generate는 Python/GIL-bound라 스레드 DP가 오히려 느릴 수 있음.",
     )
     parser.add_argument(
         "--limit",
@@ -980,7 +981,7 @@ if __name__ == "__main__":
         debug_n=args.debug,
         mem_fraction=args.mem_fraction,
         max_batch=args.max_batch_size,
-        data_parallel=not args.no_data_parallel,
+        data_parallel=args.data_parallel,
     )
 
     all_model_results = {}  # model_name → {id: bool}
