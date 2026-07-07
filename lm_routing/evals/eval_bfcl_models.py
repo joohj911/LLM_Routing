@@ -23,10 +23,14 @@ BFCL 카테고리별 평가 기준:
 import argparse
 import copy
 import json
+import os
 import re
 import time
 import urllib.error
 import urllib.request
+
+# 가변 길이 배치의 단편화(fragmentation) OOM 완화. torch import 전에 설정해야 적용됨.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 import torch
 from tqdm import tqdm
@@ -530,13 +534,17 @@ def auto_batch_size(
     calib_texts: list[str],
     max_new_tokens: int,
     device: str,
-    target_fraction: float = 0.8,
+    target_fraction: float = 0.75,
+    safety: float = 0.85,
+    cap: int = 96,
 ) -> int:
     """
     2-point GPU memory calibration to find the largest safe batch size.
 
-    For device_map="auto" (device="cuda"), sums memory across all GPUs.
-    For a specific device ("cuda:0"), measures only that GPU.
+    device_map="auto" 는 모델을 레이어별로 여러 GPU에 나눠 얹기 때문에, 한 배치의
+    activation/KV 부하가 특정 GPU에 몰리면 총합 메모리가 남아도 그 GPU 한 장이 먼저
+    OOM 난다. 따라서 배치 상한은 **GPU를 합산이 아니라 가장 빡빡한 GPU(per-GPU 병목)**
+    기준으로 잡는다. 추가로 target_fraction·safety 여유와 상한(cap)을 둔다.
     Returns 1 for CPU or if calibration fails.
     """
     if not torch.cuda.is_available() or device == "cpu":
@@ -547,18 +555,16 @@ def auto_batch_size(
     else:
         gpu_indices = list(range(torch.cuda.device_count()))
 
-    total_mem = sum(
-        torch.cuda.get_device_properties(i).total_memory for i in gpu_indices
-    )
+    totals = [torch.cuda.get_device_properties(i).total_memory for i in gpu_indices]
 
     def _reset():
         for i in gpu_indices:
             torch.cuda.reset_peak_memory_stats(i)
 
-    def _peak():
-        return sum(torch.cuda.max_memory_allocated(i) for i in gpu_indices)
+    def _peaks() -> list[int]:
+        return [torch.cuda.max_memory_allocated(i) for i in gpu_indices]
 
-    def _run(texts: list[str]) -> int:
+    def _run(texts: list[str]) -> list[int]:
         _reset()
         enc = tokenizer(texts, return_tensors="pt", padding=True, truncation=False)
         enc = {k: v.to(model.device) for k, v in enc.items()}
@@ -571,7 +577,7 @@ def auto_batch_size(
             )
         del enc, out
         torch.cuda.empty_cache()
-        return _peak()
+        return _peaks()
 
     if not calib_texts:
         return 1
@@ -580,28 +586,37 @@ def auto_batch_size(
     text_b = calib_texts[1] if len(calib_texts) > 1 else calib_texts[0]
 
     try:
-        peak_1 = _run([text_a])
-        peak_2 = _run([text_a, text_b])
+        peak1 = _run([text_a])            # per-GPU (1 sample)
+        peak2 = _run([text_a, text_b])    # per-GPU (2 samples)
     except Exception as e:
         print(f"  [auto_batch_size] calibration failed: {e} — defaulting to 1")
         return 1
 
-    per_sample = peak_2 - peak_1
-    available = total_mem * target_fraction - peak_1
+    # per-GPU 병목: 각 GPU에서 (여유 / 샘플당 증가분) 중 최솟값이 배치 상한
+    gb, mb = 1024 ** 3, 1024 ** 2
+    limits, worst = [], None
+    for tot, p1, p2 in zip(totals, peak1, peak2):
+        per_sample_i = p2 - p1
+        headroom_i = tot * target_fraction - p1
+        if per_sample_i > 0 and headroom_i > 0:
+            b_i = 1 + headroom_i / per_sample_i
+            limits.append(b_i)
+            if worst is None or b_i < worst[0]:
+                worst = (b_i, per_sample_i, p1, tot)
 
-    if per_sample <= 0:
+    if not limits:
         batch = 1
     else:
-        batch = max(1, min(1 + int(available / per_sample), 128))
+        batch = max(1, min(int(min(limits) * safety), cap))
 
-    gb, mb = 1024 ** 3, 1024 ** 2
     gpu_label = f"{len(gpu_indices)}×GPU" if len(gpu_indices) > 1 else f"GPU:{gpu_indices[0]}"
-    print(
-        f"  {gpu_label} memory: total={total_mem/gb:.1f}GB, "
-        f"model+overhead={peak_1/gb:.2f}GB, "
-        f"per_sample={per_sample/mb:.1f}MB "
-        f"→ auto batch_size={batch}"
-    )
+    if worst is not None:
+        _, ps_w, p1_w, tot_w = worst
+        print(
+            f"  {gpu_label} (per-GPU bottleneck): tightest GPU "
+            f"used={p1_w/gb:.2f}/{tot_w/gb:.1f}GB, per_sample={ps_w/mb:.1f}MB, "
+            f"frac={target_fraction}, safety={safety} → auto batch_size={batch}"
+        )
     return batch
 
 
@@ -642,67 +657,31 @@ def evaluate_model(
             id_to_sample[sid]["_split"] = pm.get("bfcl_split", "")
             valid.append(pm)
 
-    # batch_size=0 → GPU 메모리 기반 자동 탐지
-    if batch_size == 0:
-        # 전체 데이터를 렌더링해 가장 긴 2개를 calibration에 사용.
-        # _apply_template은 template 포맷팅만 하므로 전체 순회해도 빠름.
-        # 첫 2개만 쓰면 짧은 irrelevance 샘플이 걸려 per_sample을 과소추정할 수 있음.
-        all_texts = []
-        for pm in valid:
-            sid = pm["id"]
-            sample = id_to_sample[sid]
-            msgs = build_messages(sample.get("question", []))
-            if msgs:
-                tools = build_tools(sample.get("function", []))
-                all_texts.append(_apply_template(tokenizer, msgs, tools))
-        all_texts.sort(key=len, reverse=True)
-        calib_texts = all_texts[:2]
-        batch_size = auto_batch_size(model, tokenizer, calib_texts, max_new_tokens, device)
-
-    pbar = tqdm(
-        range(0, len(valid), batch_size),
-        desc=model_name,
-        leave=True,
-    )
-    for batch_start in pbar:
-        batch_metas = valid[batch_start : batch_start + batch_size]
-
-        batch_inputs, batch_ids, batch_samples = [], [], []
-        for pm in batch_metas:
-            sid = pm["id"]
-            sample = id_to_sample[sid]
-            msgs = build_messages(sample.get("question", []))
-            if not msgs:
-                results[sid] = False
-                failed_samples += 1
-                continue
-            tools = build_tools(sample.get("function", []))
-            batch_inputs.append((msgs, tools))
-            batch_ids.append(sid)
-            batch_samples.append(sample)
-
-        if not batch_inputs:
+    # 각 valid 샘플을 한 번만 렌더링 → (sid, sample, msgs, tools). msgs 없는 건 fail.
+    items = []
+    for pm in valid:
+        sid = pm["id"]
+        sample = id_to_sample[sid]
+        msgs = build_messages(sample.get("question", []))
+        if not msgs:
+            results[sid] = False
+            failed_samples += 1
             continue
+        tools = build_tools(sample.get("function", []))
+        items.append((sid, sample, msgs, tools))
 
-        try:
-            responses = run_batch_inference(model, tokenizer, batch_inputs, max_new_tokens)
-        except Exception as e:
-            # Batch too large (OOM or 32-bit index overflow) — retry one sample at a time
-            print(f"\n  [warn] batch@{batch_start} failed ({type(e).__name__}), retrying sample-by-sample ...")
-            torch.cuda.empty_cache()
-            responses = []
-            for single_input in batch_inputs:
-                try:
-                    r = run_batch_inference(model, tokenizer, [single_input], max_new_tokens)
-                    responses.extend(r)
-                except Exception as e2:
-                    print(f"\n  [error] single sample failed: {e2}")
-                    responses.append("")
-                    failed_samples += 1
+    # batch_size=0 → GPU 메모리 기반 자동 탐지 (가장 긴 2개로 calibration).
+    # 짧은 샘플로 calibration하면 per_sample을 과소추정하므로 항상 최장 길이 기준.
+    if batch_size == 0:
+        all_texts = sorted(
+            (_apply_template(tokenizer, m, t) for _, _, m, t in items),
+            key=len, reverse=True,
+        )
+        batch_size = auto_batch_size(model, tokenizer, all_texts[:2], max_new_tokens, device)
 
-        for sid, response, sample, (msgs, tools) in zip(
-            batch_ids, responses, batch_samples, batch_inputs
-        ):
+    def _process_batch(batch_items, responses):
+        nonlocal debug_printed
+        for (sid, sample, msgs, tools), response in zip(batch_items, responses):
             split_name = sample.get("_split", "")
             is_irrelevance = "irrelevance" in split_name
             predicted_calls = parse_tool_calls(response)
@@ -710,7 +689,6 @@ def evaluate_model(
             results[sid] = is_pass(predicted_calls, ground_truth, is_irrelevance)
 
             # --save-responses: 샘플별 전체 추적 레코드.
-            # "왜 이 샘플이 fail이지?"를 raw 출력까지 거슬러 확인할 수 있게 한다.
             if trace_sink is not None:
                 user_msg = next(
                     (m["content"] for m in reversed(msgs) if m.get("role") == "user"), ""
@@ -728,9 +706,7 @@ def evaluate_model(
                     "pass": bool(results[sid]),
                 })
 
-            # --debug: 모델 raw 출력을 직접 보여줘 tool call 생성 여부를 확인.
-            # 여러 모델이 정확히 같은 정답률을 보이는 경우(=irrelevance 바닥값) 원인
-            # 진단에 사용한다. batch_size=1 vs N 비교로 배치 생성 깨짐도 잡을 수 있다.
+            # --debug: 모델 raw 출력을 직접 보여줘 tool call 생성 여부 확인.
             if debug_printed < debug_n:
                 debug_printed += 1
                 print("\n" + "─" * 70)
@@ -740,6 +716,37 @@ def evaluate_model(
                 print(f"[debug] parsed tool calls: {predicted_calls}")
                 print(f"[debug] ground truth      : {ground_truth}")
                 print(f"[debug] → pass = {results[sid]}")
+
+    # Adaptive 배치 루프: OOM이 나면 batch_size를 절반으로 줄여 같은 지점을 재시도한다
+    # (샘플 1개씩 재시도로 떨어지지 않고, 이후 배치들도 줄어든 크기로 진행 → OOM 반복 방지).
+    cur_bs = max(1, batch_size)
+    i = 0
+    pbar = tqdm(total=len(items), desc=model_name, leave=True)
+    while i < len(items):
+        batch_items = items[i : i + cur_bs]
+        batch_inputs = [(m, t) for _, _, m, t in batch_items]
+        try:
+            responses = run_batch_inference(model, tokenizer, batch_inputs, max_new_tokens)
+        except Exception as e:
+            torch.cuda.empty_cache()
+            if cur_bs > 1:
+                new_bs = max(1, cur_bs // 2)
+                print(f"\n  [warn] batch@{i} ({len(batch_inputs)} samples) {type(e).__name__} "
+                      f"→ batch_size {cur_bs}→{new_bs}, retrying")
+                cur_bs = new_bs
+                continue  # 같은 i를 더 작은 배치로 재시도
+            # 단일 샘플조차 실패 → 그 샘플만 fail 처리하고 넘어감
+            sid = batch_items[0][0]
+            print(f"\n  [error] single sample @{i} failed ({type(e).__name__}) — marking fail")
+            results[sid] = False
+            failed_samples += 1
+            i += 1
+            pbar.update(1)
+            continue
+        _process_batch(batch_items, responses)
+        i += len(batch_items)
+        pbar.update(len(batch_items))
+    pbar.close()
 
     # Explicitly release GPU memory before returning so the next model can load cleanly.
     # del must happen in this scope — a helper function's del only removes its local ref.
