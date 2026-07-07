@@ -534,9 +534,9 @@ def auto_batch_size(
     calib_texts: list[str],
     max_new_tokens: int,
     device: str,
-    target_fraction: float = 0.75,
-    safety: float = 0.85,
-    cap: int = 96,
+    target_fraction: float = 0.9,
+    safety: float = 1.0,
+    cap: int = 256,
 ) -> int:
     """
     2-point GPU memory calibration to find the largest safe batch size.
@@ -635,6 +635,8 @@ def evaluate_model(
     batch_size: int = 0,
     debug_n: int = 0,
     trace_sink: list | None = None,
+    mem_fraction: float = 0.9,
+    max_batch: int = 256,
 ) -> tuple[dict[str, bool], str]:
     """한 모델을 전체 BFCL 샘플에 대해 배치 추론으로 평가하고 {id: pass} 딕셔너리 반환.
 
@@ -677,7 +679,8 @@ def evaluate_model(
             (_apply_template(tokenizer, m, t) for _, _, m, t in items),
             key=len, reverse=True,
         )
-        batch_size = auto_batch_size(model, tokenizer, all_texts[:2], max_new_tokens, device)
+        batch_size = auto_batch_size(model, tokenizer, all_texts[:2], max_new_tokens, device,
+                                     target_fraction=mem_fraction, cap=max_batch)
 
     def _process_batch(batch_items, responses):
         nonlocal debug_printed
@@ -720,6 +723,9 @@ def evaluate_model(
     # Adaptive 배치 루프: OOM이 나면 batch_size를 절반으로 줄여 같은 지점을 재시도한다
     # (샘플 1개씩 재시도로 떨어지지 않고, 이후 배치들도 줄어든 크기로 진행 → OOM 반복 방지).
     cur_bs = max(1, batch_size)
+    init_bs = cur_bs           # 회복 상한(초기 auto/지정 배치)
+    ok_streak = 0              # 연속 성공 배치 수 (회복 트리거)
+    RECOVER_AFTER = 20         # 이만큼 연속 성공하면 배치 ×2 (긴 프롬프트 스파이크 후 복구)
     i = 0
     pbar = tqdm(total=len(items), desc=model_name, leave=True)
     while i < len(items):
@@ -729,6 +735,7 @@ def evaluate_model(
             responses = run_batch_inference(model, tokenizer, batch_inputs, max_new_tokens)
         except Exception as e:
             torch.cuda.empty_cache()
+            ok_streak = 0
             if cur_bs > 1:
                 new_bs = max(1, cur_bs // 2)
                 print(f"\n  [warn] batch@{i} ({len(batch_inputs)} samples) {type(e).__name__} "
@@ -746,6 +753,11 @@ def evaluate_model(
         _process_batch(batch_items, responses)
         i += len(batch_items)
         pbar.update(len(batch_items))
+        # 회복: 줄었던 배치를 연속 성공 시 초기값까지 다시 키움 (영구 축소 방지)
+        ok_streak += 1
+        if cur_bs < init_bs and ok_streak >= RECOVER_AFTER:
+            cur_bs = min(init_bs, cur_bs * 2)
+            ok_streak = 0
     pbar.close()
 
     # Explicitly release GPU memory before returning so the next model can load cleanly.
@@ -798,7 +810,16 @@ if __name__ == "__main__":
         "--batch-size",
         type=int,
         default=0,
-        help="배치 추론 크기. 기본값 0 = GPU 메모리(80%% 목표)에서 자동 탐지.",
+        help="배치 추론 크기. 기본값 0 = GPU 메모리에서 자동 탐지(per-GPU 병목 기준). "
+        "OOM 시 자동으로 절반씩 줄여 재시도하므로 넉넉히 잡아도 됨.",
+    )
+    parser.add_argument(
+        "--mem-fraction", type=float, default=0.9,
+        help="auto batch 시 사용할 per-GPU 메모리 비율 목표(기본 0.9). 높일수록 공격적.",
+    )
+    parser.add_argument(
+        "--max-batch-size", type=int, default=256,
+        help="auto batch 상한(기본 256).",
     )
     parser.add_argument(
         "--limit",
@@ -864,6 +885,8 @@ if __name__ == "__main__":
         load_in_4bit=args.load_in_4bit,
         batch_size=args.batch_size,
         debug_n=args.debug,
+        mem_fraction=args.mem_fraction,
+        max_batch=args.max_batch_size,
     )
 
     all_model_results = {}  # model_name → {id: bool}
