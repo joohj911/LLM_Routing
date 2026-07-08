@@ -253,6 +253,12 @@ if __name__ == "__main__":
         default=None,
         help="Shortcut: path to local .pt R2-Router (per-model) checkpoint (sets r2_router.checkpoint_path in config)",
     )
+    parser.add_argument(
+        "--cscr-checkpoint",
+        type=str,
+        default=None,
+        help="Shortcut: path to local .pt CSCR router checkpoint (train_cscr.py output); sets cscr.checkpoint_path",
+    )
     parser.add_argument("--num-results", type=int, default=10)
     parser.add_argument("--random-iters", type=int, default=10)
     parser.add_argument("--seed", type=int, default=42,
@@ -298,6 +304,8 @@ if __name__ == "__main__":
             config["uniroute_legacy"] = {"checkpoint_path": args.uniroute_legacy_checkpoint}
         if args.r2_router_checkpoint:
             config["r2_router"] = {"checkpoint_path": args.r2_router_checkpoint}
+        if args.cscr_checkpoint:
+            config["cscr"] = {"checkpoint_path": args.cscr_checkpoint}
         if not config:
             config = None
 

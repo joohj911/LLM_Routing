@@ -177,6 +177,32 @@ class R2Router(Router):
         return self.model.predict(np.asarray(emb, dtype=np.float32))
 
 
+@no_parallel
+class CSCRRouter(Router):
+    """CSCR (arXiv:2508.12491, "Cost-Aware Contrastive Routing") — 완결형 대조 라우터.
+    frozen e5 → 학습된 2-layer MLP g_θ → q 를 실제 모델 출력에서 계산한 고정 expert
+    descriptor 에 cosine-NN(=FAISS flat_ip) 라우팅. checkpoint 는 train_cscr.py 산출물."""
+
+    def __init__(self, checkpoint_path: str, **kwargs):
+        if not os.path.isfile(checkpoint_path):
+            raise ValueError(
+                f"CSCR router checkpoint not found: {checkpoint_path}\n"
+                "먼저 lm_routing/routers/cscr/descriptors.py 로 descriptor 계산 후 "
+                "lm_routing/routers/cscr/train_cscr.py 로 학습하세요."
+            )
+        from lm_routing.routers.cscr.model import CSCRRouterModel
+        self.model = CSCRRouterModel.load(checkpoint_path)
+        self._embed = get_embedding_model(self.model.embedding_model)
+
+    def calculate_strong_win_rate(self, prompt: str) -> float:
+        emb = self._embed.encode(
+            f"query: {prompt}",
+            convert_to_tensor=False,
+            normalize_embeddings=False,
+        )
+        return self.model.predict(np.asarray(emb, dtype=np.float32))
+
+
 ROUTER_CLS = {
     "mf": MatrixFactorizationRouter,
     "random": RandomRouter,
@@ -185,5 +211,6 @@ ROUTER_CLS = {
     "uni_r2": UniR2Router,
     "uniroute_legacy": UniRouteLegacyRouter,
     "r2_router": R2Router,
+    "cscr": CSCRRouter,
 }
 NAME_TO_CLS = {v: k for k, v in ROUTER_CLS.items()}

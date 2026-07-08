@@ -243,7 +243,7 @@ def main():
         if args.figures in ("both", "all"):
             base = args.all_methods or [
                 "mf", "uniroute", "uniroute_train", "uni_r2", "uniroute_legacy",
-                "r2_router",
+                "r2_router", "cscr",
             ]
             all_methods = (["random"] if args.graph_random else []) + base
             _figure(pairs, lambda pair: all_methods, f"{args.output_prefix}_all{sfx}.png",

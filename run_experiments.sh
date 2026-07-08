@@ -36,6 +36,10 @@ UNIROUTE_ASSIGNMENT="hard"   # 기본 hard(최근접 클러스터). soft 쓰려�
 UNIROUTE_PSI="val"           # Ψ 추정 데이터: val(논문 설계, 기본) | train(전체 refit)
 MF_LR="3e-4"
 MF_WD="1e-5"
+WITH_CSCR=0                   # --with-cscr 로 켜면 CSCR(대조 KNN 라우터) descriptor 계산+학습+평가 포함
+CSCR_NPROBES=192             # CSCR descriptor probe 프롬프트 수 (논문 기본)
+CSCR_TOPK=256                # CSCR descriptor 차원(공유 top-k vocab basis)
+CSCR_NTOKENS=10              # CSCR descriptor probe 당 greedy 생성 토큰 수
 SEED=42                      # 라우터 학습/평가 randomness seed (MF init, KMeans, random 라우터)
 SPLIT_SEED=42                 # train/test split seed. seed sweep 시 이걸 고정하면 test set·기준선이
                               #   상수로 유지돼 band가 '라우터 변동'만 반영 (권장: 고정)
@@ -54,6 +58,8 @@ while [[ $# -gt 0 ]]; do
     --embedding-model) EMB_MODEL="$2"; shift 2 ;;
     --uniroute-assignment) UNIROUTE_ASSIGNMENT="$2"; shift 2 ;;
     --uniroute-psi)   UNIROUTE_PSI="$2"; shift 2 ;;
+    --with-cscr)      WITH_CSCR=1; shift ;;
+    --cscr-nprobes)   CSCR_NPROBES="$2"; shift 2 ;;
     --mf-lr)          MF_LR="$2"; shift 2 ;;
     --mf-weight-decay) MF_WD="$2"; shift 2 ;;
     --seed)           SEED="$2"; shift 2 ;;
@@ -330,10 +336,42 @@ python lm_routing/routers/r2_router/train_r2_router.py \
   --strong-model "${STRONG}" --seed "${SEED}" --embedding-model "${EMB_MODEL}"
 
 # ─────────────────────────────────────────────
+# Step 5c: (opt) CSCR — 실제 모델 logit descriptor 계산 + 대조 라우터 g_θ 학습
+# ─────────────────────────────────────────────
+# CSCR(arXiv:2508.12491): weak/strong 모델 출력에서 logit-footprint descriptor 를 계산하고
+# (GPU probe 추론), frozen e5 → 2-layer MLP g_θ 를 cost-spectrum InfoNCE 로 학습해 q 를
+# descriptor 에 cosine-NN 라우팅한다. --with-cscr 일 때만 실행(모델 재로딩으로 시간 듦).
+CSCR_ROUTERS=""; CSCR_CKPT_A=""; CSCR_CKPT_B=""
+if [[ $WITH_CSCR -eq 1 ]]; then
+  echo ""
+  echo "[Step 5c] CSCR descriptors + contrastive router (probes=${CSCR_NPROBES}, top_k=${CSCR_TOPK})"
+  train_cscr_pair () {  # $1=data_dir  $2=weak
+    python lm_routing/routers/cscr/descriptors.py \
+      --prompts-path "${BFCL_DIR}/prompts.json" \
+      --weak-model "$2" --strong-model "${STRONG}" \
+      --output-path "$1/cscr_descriptors.npz" \
+      --n-probes "${CSCR_NPROBES}" --top-k "${CSCR_TOPK}" --n-tokens "${CSCR_NTOKENS}" \
+      --seed "${SEED}" ${LOAD_4BIT}
+    python lm_routing/routers/cscr/train_cscr.py \
+      --train-data "$1/train_data.json" --npy-path "${BFCL_DIR}/embeddings.npy" \
+      --descriptors "$1/cscr_descriptors.npz" --output-path "$1/cscr_model.pt" \
+      --weak-model "$2" --strong-model "${STRONG}" \
+      --embedding-model "${EMB_MODEL}" --seed "${SEED}"
+  }
+  echo "  Pair A CSCR → ${DATA_0_8B}/cscr_model.pt"
+  train_cscr_pair "${DATA_0_8B}" "${WEAK_0_8B}"
+  echo "  Pair B CSCR → ${DATA_2B}/cscr_model.pt"
+  train_cscr_pair "${DATA_2B}" "${WEAK_2B}"
+  CSCR_ROUTERS="cscr"
+  CSCR_CKPT_A="--cscr-checkpoint ${DATA_0_8B}/cscr_model.pt"
+  CSCR_CKPT_B="--cscr-checkpoint ${DATA_2B}/cscr_model.pt"
+fi
+
+# ─────────────────────────────────────────────
 # Step 6: Evaluate all routers on test set
 # ─────────────────────────────────────────────
 echo ""
-echo "[Step 6/7] Evaluating routers (random / mf / uniroute×3 / uni_r2 / r2_router)"
+echo "[Step 6/7] Evaluating routers (random / mf / uniroute×3 / uni_r2 / r2_router$([[ $WITH_CSCR -eq 1 ]] && echo ' / cscr'))"
 
 RESULT_0_8B="${RESULTS_DIR}/pair_0.8B"
 RESULT_2B="${RESULTS_DIR}/pair_2B"
@@ -341,7 +379,7 @@ mkdir -p "${RESULT_0_8B}" "${RESULT_2B}"
 
 echo "  Pair A → ${RESULT_0_8B}/eval_results.json"
 python -m lm_routing.evals.evaluate \
-  --routers random mf uniroute uniroute_train uni_r2 uniroute_legacy r2_router \
+  --routers random mf uniroute uniroute_train uni_r2 uniroute_legacy r2_router ${CSCR_ROUTERS} \
   --test-data         "${DATA_0_8B}/test_data.json" \
   --mf-checkpoint     "${DATA_0_8B}/mf_model.pt" \
   --uniroute-checkpoint "${DATA_0_8B}/uniroute_model.pt" \
@@ -349,19 +387,20 @@ python -m lm_routing.evals.evaluate \
   --uni-r2-checkpoint "${DATA_0_8B}/uni_r2_model.pt" \
   --uniroute-legacy-checkpoint "${DATA_0_8B}/uniroute_legacy_model.pt" \
   --r2-router-checkpoint "${DATA_0_8B}/r2_router_model.pt" \
+  ${CSCR_CKPT_A} \
   --strong-model      "${STRONG}" \
   --weak-model        "${WEAK_0_8B}" \
   --output            "${RESULT_0_8B}" \
   --num-results       "${NUM_RESULTS}" \
   --random-iters      "${RANDOM_ITERS}" \
-  --overwrite-cache   mf uniroute uniroute_train uni_r2 uniroute_legacy r2_router \
+  --overwrite-cache   mf uniroute uniroute_train uni_r2 uniroute_legacy r2_router ${CSCR_ROUTERS} \
   --seed              "${SEED}" \
   --quiet \
   --output-json       "${RESULT_0_8B}/eval_results.json"
 
 echo "  Pair B → ${RESULT_2B}/eval_results.json"
 python -m lm_routing.evals.evaluate \
-  --routers random mf uniroute uniroute_train uni_r2 uniroute_legacy r2_router \
+  --routers random mf uniroute uniroute_train uni_r2 uniroute_legacy r2_router ${CSCR_ROUTERS} \
   --test-data         "${DATA_2B}/test_data.json" \
   --mf-checkpoint     "${DATA_2B}/mf_model.pt" \
   --uniroute-checkpoint "${DATA_2B}/uniroute_model.pt" \
@@ -369,12 +408,13 @@ python -m lm_routing.evals.evaluate \
   --uni-r2-checkpoint "${DATA_2B}/uni_r2_model.pt" \
   --uniroute-legacy-checkpoint "${DATA_2B}/uniroute_legacy_model.pt" \
   --r2-router-checkpoint "${DATA_2B}/r2_router_model.pt" \
+  ${CSCR_CKPT_B} \
   --strong-model      "${STRONG}" \
   --weak-model        "${WEAK_2B}" \
   --output            "${RESULT_2B}" \
   --num-results       "${NUM_RESULTS}" \
   --random-iters      "${RANDOM_ITERS}" \
-  --overwrite-cache   mf uniroute uniroute_train uni_r2 uniroute_legacy r2_router \
+  --overwrite-cache   mf uniroute uniroute_train uni_r2 uniroute_legacy r2_router ${CSCR_ROUTERS} \
   --seed              "${SEED}" \
   --quiet \
   --output-json       "${RESULT_2B}/eval_results.json"
