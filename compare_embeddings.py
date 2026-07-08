@@ -121,7 +121,13 @@ def make_graph(emb, pairs, drop, out_png):
             ax.plot(GRID, mean, color=COLOR[m], lw=2.2, label=f"{LABEL[m]}{wtxt}")
             ax.fill_between(GRID, mean - std, mean + std, color=COLOR[m], alpha=0.13, lw=0)
             if not np.isnan(wmean):
-                ax.plot([100 - wmean], [sg - dr], "o", color=COLOR[m], ms=7, zorder=5)
+                # headline weak%(=Excel 값)의 x 에서 '그려진 평균 곡선 위' 점을 찍는다.
+                # (y 를 strong−drop 로 고정하면 fine/coarse·평균순서 차이로 점이 선을 벗어남)
+                x = 100.0 - wmean
+                y = float(np.interp(x, GRID, mean))
+                ax.plot([x], [y], "o", color=COLOR[m], ms=7, zorder=5)
+                ax.annotate(f"{wmean:.1f}%", (x, y), textcoords="offset points",
+                            xytext=(4, 5), fontsize=8, fontweight="bold", color=COLOR[m])
         ax.axhline(wk, color="#555", ls=":", lw=1.0, label=f"Weak only ({wk:.1f}%)")
         ax.axhline(sg, color="#C62828", ls=":", lw=1.0, label=f"Strong only ({sg:.1f}%)")
         ax.axhline(sg - dr, color="#C62828", ls=(0, (1, 3)), lw=0.9, label=f"Strong −{dr:.0f}%p")
