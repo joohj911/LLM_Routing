@@ -139,6 +139,7 @@ def make_graph(emb, pairs, drop, out_png):
         P = pairs[pair]
         wk = float(np.mean(P["weak"])); sg = float(np.mean(P["strong"])); dr = P["drop"]
         target = sg - dr
+        drawn = []   # (method, mean_curve, op_weak) — inset 재사용
         for m in KEYS:
             if m not in P["curves"]:
                 continue
@@ -148,11 +149,9 @@ def make_graph(emb, pairs, drop, out_png):
             ax.plot(GRID, mean, color=COLOR[m], lw=2.2, label=f"{LABEL[m]}{wtxt}")
             ax.fill_between(GRID, mean - std, mean + std, color=COLOR[m], alpha=0.13, lw=0)
             if not np.isnan(ow):
-                # 점 = 곡선 ∩ (strong−drop): x=100−weak%(=strong%), y=target. 정확히 선 위·수평선 위.
-                x = 100.0 - ow
-                ax.plot([x], [target], "o", color=COLOR[m], ms=7, zorder=5)
-                ax.annotate(f"{ow:.1f}%", (x, target), textcoords="offset points",
-                            xytext=(4, 5), fontsize=8, fontweight="bold", color=COLOR[m])
+                # 점 = 곡선 ∩ (strong−drop): x=100−weak%(=strong%), y=target (숫자는 legend 에만)
+                ax.plot([100.0 - ow], [target], "o", color=COLOR[m], ms=7, zorder=5)
+                drawn.append((m, mean, ow))
         ax.axhline(wk, color="#555", ls=":", lw=1.0, label=f"Weak only ({wk:.1f}%)")
         ax.axhline(sg, color="#C62828", ls=":", lw=1.0, label=f"Strong only ({sg:.1f}%)")
         ax.axhline(sg - dr, color="#C62828", ls=(0, (1, 3)), lw=0.9, label=f"Strong −{dr:.0f}%p")
@@ -160,6 +159,23 @@ def make_graph(emb, pairs, drop, out_png):
         ax.set_xlabel("Strong Model Calls (%)"); ax.set_ylabel("Pass Rate (%)")
         ax.set_title(pair, fontweight="bold"); ax.grid(True, alpha=0.3); ax.set_xlim(-2, 102)
         ax.legend(loc="lower right", fontsize=8)
+
+        # ── 좌상단 확대 inset: strong−drop 교차 부분 ──
+        ops = [100.0 - ow for _, _, ow in drawn]
+        if ops:
+            xlo = max(0.0, min(ops) - 3.0); xhi = min(100.0, max(ops) + 3.0)
+            if xhi - xlo < 6.0:                      # 너무 좁으면 최소 폭 확보
+                mid = (xlo + xhi) / 2; xlo, xhi = max(0.0, mid - 3), min(100.0, mid + 3)
+            ylo, yhi = target - 3.0, min(sg + 0.4, target + 3.0)
+            axins = ax.inset_axes([0.06, 0.56, 0.40, 0.40])
+            for m, mean, ow in drawn:
+                axins.plot(GRID, mean, color=COLOR[m], lw=1.6)
+                axins.plot([100.0 - ow], [target], "o", color=COLOR[m], ms=5, zorder=5)
+            axins.axhline(target, color="#C62828", ls=(0, (1, 3)), lw=0.9)
+            axins.set_xlim(xlo, xhi); axins.set_ylim(ylo, yhi)
+            axins.tick_params(labelsize=6); axins.grid(True, alpha=0.3)
+            axins.set_title(f"zoom @ Strong−{dr:.0f}%p", fontsize=7)
+            ax.indicate_inset_zoom(axins, edgecolor="#999999", alpha=0.5)
     fig.suptitle(f"Seed-averaged deferral curves — embedding: {emb}", fontsize=13)
     plt.tight_layout(); plt.savefig(out_png, dpi=150, bbox_inches="tight"); plt.close(fig)
     print(f"Saved → {out_png}")
