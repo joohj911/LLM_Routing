@@ -5,7 +5,7 @@
 핵심: e5 임베딩 φ(x)는 그대로 두고(frozen), 그 위에 2-layer MLP head g_θ만
 학습해 "weak로 보내도 되는 프롬프트"와 "strong이 필요한 프롬프트"를 잘 가르는
 공간으로 변환한다. 산출물 g_θ(φ(x))를 새 임베딩으로 써서 기존 라우터
-(MF/UniRoute/permodel)에 그대로 투입한다("대조 임베딩만 이식").
+(MF / UniRoute / uni_r2 / r2_router)에 그대로 투입한다("대조 임베딩만 이식").
 
 CSCREncoder는 SentenceTransformer와 같은 .encode() 인터페이스를 노출하므로,
 get_embedding_model("cscr:<head.pt>")로 로드되면 라우터 코드 변경 없이

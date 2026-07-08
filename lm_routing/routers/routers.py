@@ -148,9 +148,9 @@ class UniRouteLegacyRouter(UniRouteRouter):
 
 
 @no_parallel
-class PerModelRouter(Router):
+class R2Router(Router):
     """
-    Per-model regression router = R2-Router 의 per-model 라우터(r2_router/router.py)를
+    R2-Router 의 per-model 라우터(github: UCF-ML-Research/R2-Router, r2_router/router.py)를
     2-모델·단일 budget·cost∈{0,1} 로 특수화한 것.
 
     weak/strong 각각 Ridge 회귀로 P(pass | 임베딩)를 예측하고, R2 risk
@@ -161,11 +161,11 @@ class PerModelRouter(Router):
     def __init__(self, checkpoint_path: str, **kwargs):
         if not os.path.isfile(checkpoint_path):
             raise ValueError(
-                f"Per-model router checkpoint not found: {checkpoint_path}\n"
-                "Train with lm_routing/routers/per_model/train_per_model.py first."
+                f"R2-Router checkpoint not found: {checkpoint_path}\n"
+                "Train with lm_routing/routers/r2_router/train_r2_router.py first."
             )
-        from lm_routing.routers.per_model.model import PerModelRouterModel
-        self.model = PerModelRouterModel.load(checkpoint_path)
+        from lm_routing.routers.r2_router.model import R2RouterModel
+        self.model = R2RouterModel.load(checkpoint_path)
         self._embed = get_embedding_model(self.model.embedding_model)
 
     def calculate_strong_win_rate(self, prompt: str) -> float:
@@ -177,15 +177,6 @@ class PerModelRouter(Router):
         return self.model.predict(np.asarray(emb, dtype=np.float32))
 
 
-@no_parallel
-class PerModelClusterRouter(PerModelRouter):
-    """Per-model regression router whose quality predictor is augmented with
-    UniRoute-style per-cluster pass rates as input features (trained with
-    --cluster-features K > 0). Identical runtime path to PerModelRouter — the
-    cluster augmentation is driven by fields in the checkpoint; this is a
-    separate class only so it can be compared under its own router name."""
-
-
 ROUTER_CLS = {
     "mf": MatrixFactorizationRouter,
     "random": RandomRouter,
@@ -193,7 +184,6 @@ ROUTER_CLS = {
     "uniroute_train": UniRouteTrainRouter,
     "uni_r2": UniR2Router,
     "uniroute_legacy": UniRouteLegacyRouter,
-    "permodel": PerModelRouter,
-    "permodel_cluster": PerModelClusterRouter,
+    "r2_router": R2Router,
 }
 NAME_TO_CLS = {v: k for k, v in ROUTER_CLS.items()}

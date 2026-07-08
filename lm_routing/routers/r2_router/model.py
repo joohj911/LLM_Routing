@@ -1,5 +1,5 @@
 """
-모델별 회귀 라우터 (Per-model regression router = R2-Router per-model 라우터).
+R2-Router per-model 라우터 (inference).
 
 R2-Router(github: UCF-ML-Research/R2-Router, r2_router/router.py)는 LLM마다 임베딩→품질
 Ridge 회귀기를 두고 risk = (1−λ)·quality − λ·cost 를 최대화한다. 여기서는 2-모델·짧은
@@ -17,7 +17,7 @@ import numpy as np
 import torch
 
 
-class PerModelRouterModel:
+class R2RouterModel:
     """
     추론 전용. weak/strong 두 회귀기(sklearn)를 들고 P(pass)를 예측한다.
 
@@ -31,9 +31,6 @@ class PerModelRouterModel:
         weak_clf,
         strong_clf,
         embedding_model: str = "intfloat/multilingual-e5-small",
-        centroids: np.ndarray = None,
-        psi_weak: np.ndarray = None,
-        psi_strong: np.ndarray = None,
         cost_weak: float = 0.0,
         cost_strong: float = 1.0,
     ):
@@ -43,11 +40,6 @@ class PerModelRouterModel:
         # R2 risk 목적함수의 cost(h). 2모델·상수 cost → curve 불변, λ↔threshold 대응만.
         self.cost_weak = float(cost_weak)
         self.cost_strong = float(cost_strong)
-        # cluster-informed 변형: 학습 때 KMeans 클러스터별 pass율을 feature로 썼으면
-        # 추론에서도 동일하게 [emb, ψ_weak[k], ψ_strong[k]]로 증강해야 한다.
-        self.centroids = None if centroids is None else np.asarray(centroids, dtype=np.float32)
-        self.psi_weak = None if psi_weak is None else np.asarray(psi_weak, dtype=np.float32)
-        self.psi_strong = None if psi_strong is None else np.asarray(psi_strong, dtype=np.float32)
 
     @staticmethod
     def _proba(clf, x: np.ndarray) -> float:
@@ -55,20 +47,10 @@ class PerModelRouterModel:
             return float(clf.predict_proba(x)[0, 1])
         return float(np.clip(clf.predict(x)[0], 0.0, 1.0))
 
-    def _features(self, embedding: np.ndarray) -> np.ndarray:
-        x = np.asarray(embedding, dtype=np.float32).reshape(1, -1)
-        if self.centroids is None:
-            return x
-        d = ((x - self.centroids) ** 2).sum(axis=1)
-        k = int(d.argmin())
-        return np.concatenate(
-            [x, [[self.psi_weak[k]]], [[self.psi_strong[k]]]], axis=1
-        ).astype(np.float32)
-
     def predict(self, embedding: np.ndarray) -> float:
         """단일 프롬프트 임베딩 → strong_win_rate ∈ [0, 1] (gain P_s−P_w 에 단조).
         evaluate가 이 값에 threshold 를 스윕하는 것이 곧 R2 risk 의 λ 스윕이다."""
-        x = self._features(embedding)
+        x = np.asarray(embedding, dtype=np.float32).reshape(1, -1)
         p_weak = self._proba(self.weak_clf, x)
         p_strong = self._proba(self.strong_clf, x)
         gain = p_strong - p_weak          # ∈ [-1, 1]
@@ -83,15 +65,12 @@ class PerModelRouterModel:
         return (dc * lam / (1.0 - lam) + 1.0) / 2.0
 
     @classmethod
-    def load(cls, checkpoint_path: str) -> "PerModelRouterModel":
+    def load(cls, checkpoint_path: str) -> "R2RouterModel":
         ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
         return cls(
             weak_clf=ckpt["weak_clf"],
             strong_clf=ckpt["strong_clf"],
             embedding_model=ckpt.get("embedding_model", "intfloat/multilingual-e5-small"),
-            centroids=ckpt.get("centroids"),
-            psi_weak=ckpt.get("psi_weak"),
-            psi_strong=ckpt.get("psi_strong"),
             cost_weak=ckpt.get("cost_weak", 0.0),
             cost_strong=ckpt.get("cost_strong", 1.0),
         )

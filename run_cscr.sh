@@ -3,7 +3,7 @@
 # CSCR contrastive-embedding experiment.
 #
 # frozen e5 위에 대조학습 head g_θ를 얹어 임베딩을 변환한 뒤(embeddings_cscr.npy),
-# 기존 라우터(MF / UniRoute×3 / per-model)를 그 임베딩으로 재학습·평가한다.
+# 기존 라우터(MF / UniRoute×3 / uni_r2 / r2_router)를 그 임베딩으로 재학습·평가한다.
 # e5 임베딩과 test 성능을 비교하기 위한 스크립트.
 #
 # 선행 조건: 먼저 `bash run_experiments.sh` 를 한 번 돌려
@@ -28,7 +28,6 @@ SEED=42
 EPOCHS=100
 OUT_DIM=256
 HIDDEN=512
-PMCLUSTER_K=20   # permodel_cluster: 회귀에 주입할 UniRoute 클러스터 수
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -40,7 +39,6 @@ while [[ $# -gt 0 ]]; do
     --out-dim)       OUT_DIM="$2"; shift 2 ;;
     --hidden)        HIDDEN="$2"; shift 2 ;;
     --seed)          SEED="$2"; shift 2 ;;
-    --permodel-cluster-k) PMCLUSTER_K="$2"; shift 2 ;;
     *) echo "[error] Unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -111,31 +109,24 @@ for k in 0 1; do
     --assignment "${UNIROUTE_ASSIGNMENT}" --psi-source val --k-select-psi val \
     --embedding-model "${EM}" --seed ${SEED}
 
-  python lm_routing/routers/per_model/train_per_model.py \
+  python lm_routing/routers/r2_router/train_r2_router.py \
     --train-data "${D}/train_data.json" --npy-path "${NPY}" \
-    --output-path "${D}/permodel_cscr.pt" --weak-model "${WEAK}" --strong-model "${STRONG}" \
+    --output-path "${D}/r2_router_cscr.pt" --weak-model "${WEAK}" --strong-model "${STRONG}" \
     --embedding-model "${EM}" --seed ${SEED}
-  # permodel_cluster: UniRoute(honest K, Ψ=train)-cscr 클러스터 신호를 그대로 재사용
-  python lm_routing/routers/per_model/train_per_model.py \
-    --train-data "${D}/train_data.json" --npy-path "${NPY}" \
-    --output-path "${D}/permodel_cluster_cscr.pt" --weak-model "${WEAK}" --strong-model "${STRONG}" \
-    --embedding-model "${EM}" --seed ${SEED} \
-    --uniroute-checkpoint "${D}/uniroute_train_cscr.pt"
 
   echo "[3/3] Evaluate on test → ${R}/eval_results.json"
   python -m lm_routing.evals.evaluate \
-    --routers random mf uniroute uniroute_train uni_r2 uniroute_legacy permodel permodel_cluster \
+    --routers random mf uniroute uniroute_train uni_r2 uniroute_legacy r2_router \
     --test-data                  "${D}/test_data.json" \
     --mf-checkpoint              "${D}/mf_cscr.pt" \
     --uniroute-checkpoint        "${D}/uniroute_cscr.pt" \
     --uniroute-train-checkpoint  "${D}/uniroute_train_cscr.pt" \
     --uni-r2-checkpoint          "${D}/uni_r2_cscr.pt" \
     --uniroute-legacy-checkpoint "${D}/uniroute_legacy_cscr.pt" \
-    --permodel-checkpoint        "${D}/permodel_cscr.pt" \
-    --permodel-cluster-checkpoint "${D}/permodel_cluster_cscr.pt" \
+    --r2-router-checkpoint       "${D}/r2_router_cscr.pt" \
     --strong-model "${STRONG}" --weak-model "${WEAK}" \
     --output "${R}" --num-results 10 --random-iters 10 \
-    --overwrite-cache mf uniroute uniroute_train uni_r2 uniroute_legacy permodel permodel_cluster \
+    --overwrite-cache mf uniroute uniroute_train uni_r2 uniroute_legacy r2_router \
     --seed ${SEED} --quiet --output-json "${R}/eval_results.json"
 done
 

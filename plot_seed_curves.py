@@ -221,7 +221,7 @@ def main():
                     help="어떤 그림을 만들지: both(기본) / all(전체 method) / best(선택 method만)")
     ap.add_argument("--best-methods", nargs="+", default=DEFAULT_BEST_METHODS,
                     help="best 그래프에 그릴 method 키들 (기본: mf uniroute_train). "
-                    "예: --best-methods mf uniroute_train permodel_cluster")
+                    "예: --best-methods mf uniroute_train uni_r2 r2_router")
     ap.add_argument("--all-methods", nargs="+", default=None,
                     help="all 그래프에 그릴 method 키들 (기본: 등록된 전체). 필터링용.")
     args = ap.parse_args()
@@ -243,7 +243,7 @@ def main():
         if args.figures in ("both", "all"):
             base = args.all_methods or [
                 "mf", "uniroute", "uniroute_train", "uni_r2", "uniroute_legacy",
-                "permodel", "permodel_cluster",
+                "r2_router",
             ]
             all_methods = (["random"] if args.graph_random else []) + base
             _figure(pairs, lambda pair: all_methods, f"{args.output_prefix}_all{sfx}.png",

@@ -248,17 +248,10 @@ if __name__ == "__main__":
         "(--k-select-psi val); sets uniroute_legacy.checkpoint_path for a test-set comparison.",
     )
     parser.add_argument(
-        "--permodel-checkpoint",
+        "--r2-router-checkpoint",
         type=str,
         default=None,
-        help="Shortcut: path to local .pt per-model regression router checkpoint (sets permodel.checkpoint_path in config)",
-    )
-    parser.add_argument(
-        "--permodel-cluster-checkpoint",
-        type=str,
-        default=None,
-        help="Shortcut: path to a per-model checkpoint trained with --cluster-features K "
-        "(sets permodel_cluster.checkpoint_path) for a UniRoute-informed per-model comparison.",
+        help="Shortcut: path to local .pt R2-Router (per-model) checkpoint (sets r2_router.checkpoint_path in config)",
     )
     parser.add_argument("--num-results", type=int, default=10)
     parser.add_argument("--random-iters", type=int, default=10)
@@ -303,10 +296,8 @@ if __name__ == "__main__":
             config["uni_r2"] = {"checkpoint_path": args.uni_r2_checkpoint}
         if args.uniroute_legacy_checkpoint:
             config["uniroute_legacy"] = {"checkpoint_path": args.uniroute_legacy_checkpoint}
-        if args.permodel_checkpoint:
-            config["permodel"] = {"checkpoint_path": args.permodel_checkpoint}
-        if args.permodel_cluster_checkpoint:
-            config["permodel_cluster"] = {"checkpoint_path": args.permodel_cluster_checkpoint}
+        if args.r2_router_checkpoint:
+            config["r2_router"] = {"checkpoint_path": args.r2_router_checkpoint}
         if not config:
             config = None
 

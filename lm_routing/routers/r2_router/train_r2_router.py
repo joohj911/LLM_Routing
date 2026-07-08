@@ -1,5 +1,5 @@
 """
-모델별 회귀 라우터 학습 스크립트 (R2-Router per-model 예측기).
+R2-Router per-model 라우터 학습 스크립트.
 
 R2-Router(github: UCF-ML-Research/R2-Router)의 메인 라우터(`r2_router/router.py`)는
 LLM마다 쿼리 임베딩 → 품질을 예측하는 **Ridge 회귀기**를 두고, risk 목적함수
@@ -19,10 +19,10 @@ curve가 동일하다. BFCL은 함수호출 출력이 짧고 균일해 budget-co
 라우팅 점수 = (P_strong − P_weak + 1)/2 (gain에 단조) 로 deferral curve를 그린다.
 
 사용법:
-  python lm_routing/routers/per_model/train_per_model.py \\
+  python lm_routing/routers/r2_router/train_r2_router.py \\
     --train-data ./bfcl_data_0.8B/train_data.json \\
     --npy-path   ./bfcl_data/embeddings.npy \\
-    --output-path ./bfcl_data_0.8B/permodel_model.pt \\
+    --output-path ./bfcl_data_0.8B/r2_router_model.pt \\
     --weak-model  Qwen/Qwen3.5-0.8B \\
     --strong-model Qwen/Qwen3.5-9B
 
@@ -38,53 +38,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
-from sklearn.cluster import KMeans
 from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
-
-
-def cluster_psi(embs: np.ndarray, y_weak: np.ndarray, y_strong: np.ndarray, K: int, seed: int):
-    """UniRoute식 클러스터별 pass율. 반환: (centroids(K,D), psi_weak(K,), psi_strong(K,))."""
-    km = KMeans(n_clusters=K, random_state=seed, n_init=10).fit(embs)
-    lab = km.labels_
-    psi_w = np.full(K, 0.5, dtype=np.float32)
-    psi_s = np.full(K, 0.5, dtype=np.float32)
-    for k in range(K):
-        m = lab == k
-        if m.any():
-            psi_w[k] = float(y_weak[m].mean())
-            psi_s[k] = float(y_strong[m].mean())
-    return km.cluster_centers_.astype(np.float32), psi_w, psi_s
-
-
-def assign_clusters(embs: np.ndarray, centroids: np.ndarray) -> np.ndarray:
-    """각 임베딩을 최근접 centroid에 배정."""
-    d = ((embs[:, None, :] - centroids[None, :, :]) ** 2).sum(axis=2)
-    return d.argmin(axis=1)
-
-
-def augment_with_clusters(embs: np.ndarray, centroids: np.ndarray,
-                          psi_weak: np.ndarray, psi_strong: np.ndarray) -> np.ndarray:
-    """임베딩에 [ψ_weak[k], ψ_strong[k]] (그 프롬프트가 속한 클러스터의 신호) 2개 feature 추가."""
-    lab = assign_clusters(embs, centroids)
-    return np.concatenate(
-        [embs, psi_weak[lab][:, None], psi_strong[lab][:, None]], axis=1
-    ).astype(np.float32)
-
-
-def load_uniroute_clusters(checkpoint_path: str):
-    """UniRoute 체크포인트에서 (centroids, psi_weak, psi_strong) 를 그대로 가져온다.
-    permodel_cluster의 클러스터 신호를 특정 UniRoute 설정(예: honest K, Ψ=train)과
-    '동일'하게 맞추기 위함 — 별도 KMeans를 다시 fit하지 않는다.
-    주의: UniRoute의 ψ 는 클러스터별 error rate(1−pass)다. 회귀 입력 feature로는
-    부호와 무관하게 그대로 사용한다(회귀가 가중치를 학습)."""
-    ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    centroids = np.asarray(ckpt["centroids"], dtype=np.float32)
-    psi_w = np.asarray(ckpt["psi_weak"], dtype=np.float32)
-    psi_s = np.asarray(ckpt["psi_strong"], dtype=np.float32)
-    return centroids, psi_w, psi_s
 
 
 class _Constant:
@@ -134,7 +91,7 @@ def deferral_auc(scores, weak_labels, strong_labels, n_bins: int = 10) -> float:
     return float(np.trapz(np.array(accs)[order], np.array(strong_pcts)[order]))
 
 
-def train_per_model(
+def train_r2_router(
     train_data_path: str,
     npy_path: str,
     output_path: str,
@@ -145,8 +102,6 @@ def train_per_model(
     train_ratio: float = 0.8,
     seed: int = 42,
     embedding_model: str = "intfloat/multilingual-e5-small",
-    cluster_features: int = 0,
-    uniroute_checkpoint: str = None,
     cost_weak: float = 0.0,
     cost_strong: float = 1.0,
 ) -> dict:
@@ -172,38 +127,15 @@ def train_per_model(
     except ValueError:
         cl, val = train_test_split(idx, train_size=train_ratio, random_state=seed)
 
-    # ── (옵션) UniRoute 클러스터 신호를 feature로 주입 ──
-    # 두 가지 소스:
-    #   (a) --uniroute-checkpoint: 이미 학습된 UniRoute의 centroids/ψ 를 그대로 사용
-    #       (예: honest K, Ψ=train 설정과 '동일'한 클러스터 신호). KMeans 재학습 없음.
-    #   (b) --cluster-features K: 여기서 KMeans(K)를 직접 fit (독립 K=20 등).
-    # 우선순위: (a) > (b).
-    use_uniroute = bool(uniroute_checkpoint)
-    if use_uniroute:
-        centroids, psi_w, psi_s = load_uniroute_clusters(uniroute_checkpoint)
-        cluster_features = int(len(centroids))  # 체크포인트의 K
-        # cl/val AUC 보고용 증강도 동일 centroids/ψ 사용 (최종 모델과 일관).
-        Xtr = augment_with_clusters(X[cl], centroids, psi_w, psi_s)
-        Xvl = augment_with_clusters(X[val], centroids, psi_w, psi_s)
-        print(f"  cluster-features from UniRoute ckpt (K={cluster_features}): "
-              f"{uniroute_checkpoint} — feature dim {X.shape[1]} → {Xtr.shape[1]}")
-    elif cluster_features and cluster_features > 0:
-        c_cl, pw_cl, ps_cl = cluster_psi(X[cl], y_weak[cl], y_strong[cl], cluster_features, seed)
-        Xtr = augment_with_clusters(X[cl], c_cl, pw_cl, ps_cl)
-        Xvl = augment_with_clusters(X[val], c_cl, pw_cl, ps_cl)
-        print(f"  cluster-features K={cluster_features} (own KMeans): feature dim {X.shape[1]} → {Xtr.shape[1]}")
-    else:
-        Xtr, Xvl = X[cl], X[val]
-
-    wclf = fit_regressor(Xtr, y_weak[cl], regressor, reg_C)
-    sclf = fit_regressor(Xtr, y_strong[cl], regressor, reg_C)
-    val_scores = (_proba(sclf, Xvl) - _proba(wclf, Xvl) + 1.0) / 2.0
+    wclf = fit_regressor(X[cl], y_weak[cl], regressor, reg_C)
+    sclf = fit_regressor(X[cl], y_strong[cl], regressor, reg_C)
+    val_scores = (_proba(sclf, X[val]) - _proba(wclf, X[val]) + 1.0) / 2.0
     auc = deferral_auc(val_scores, y_weak[val].astype(bool), y_strong[val].astype(bool))
     print(f"  cl={len(cl)} val={len(val)} → val deferral AUC = {auc:.5f}")
-    print(f"  mean P_weak={_proba(wclf, Xvl).mean():.3f}  "
-          f"mean P_strong={_proba(sclf, Xvl).mean():.3f}")
+    print(f"  mean P_weak={_proba(wclf, X[val]).mean():.3f}  "
+          f"mean P_strong={_proba(sclf, X[val]).mean():.3f}")
 
-    # ── 최종: 전체 train 으로 재학습 (클러스터도 전체 train으로 refit) ──
+    # ── 최종: 전체 train 으로 재학습 ──
     ckpt = {
         "weak_model": weak_model,
         "strong_model": strong_model,
@@ -212,32 +144,20 @@ def train_per_model(
         "val_auc": auc,
         "embedding_model": embedding_model,
         "embedding_prefix": "query: ",
-        "cluster_features": int(cluster_features or 0),
         "cost_weak": float(cost_weak),      # R2 risk 목적함수의 cost(h). 2모델·상수 cost →
         "cost_strong": float(cost_strong),  #   curve 불변, λ↔threshold 대응만 정함.
     }
-    if use_uniroute:
-        # UniRoute 체크포인트의 centroids/ψ 를 그대로 최종 feature에 사용 (재학습 없음).
-        Xfull = augment_with_clusters(X, centroids, psi_w, psi_s)
-        ckpt.update({"centroids": centroids, "psi_weak": psi_w, "psi_strong": psi_s,
-                     "cluster_source": f"uniroute:{uniroute_checkpoint}"})
-    elif cluster_features and cluster_features > 0:
-        centroids, psi_w, psi_s = cluster_psi(X, y_weak, y_strong, cluster_features, seed)
-        Xfull = augment_with_clusters(X, centroids, psi_w, psi_s)
-        ckpt.update({"centroids": centroids, "psi_weak": psi_w, "psi_strong": psi_s})
-    else:
-        Xfull = X
-    ckpt["weak_clf"] = fit_regressor(Xfull, y_weak, regressor, reg_C)
-    ckpt["strong_clf"] = fit_regressor(Xfull, y_strong, regressor, reg_C)
+    ckpt["weak_clf"] = fit_regressor(X, y_weak, regressor, reg_C)
+    ckpt["strong_clf"] = fit_regressor(X, y_strong, regressor, reg_C)
 
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     torch.save(ckpt, output_path)
-    print(f"Saved per-model router checkpoint → {output_path}\n")
+    print(f"Saved R2-Router (per-model) checkpoint → {output_path}\n")
     return {"val_auc": auc}
 
 
 if __name__ == "__main__":
-    p = argparse.ArgumentParser(description="Train per-model regression router (R2-style, budget-free)")
+    p = argparse.ArgumentParser(description="Train R2-Router per-model router (2-model, single budget, cost 0/1)")
     p.add_argument("--train-data", required=True)
     p.add_argument("--npy-path", required=True)
     p.add_argument("--output-path", required=True)
@@ -250,14 +170,6 @@ if __name__ == "__main__":
     p.add_argument("--train-ratio", type=float, default=0.8)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--embedding-model", type=str, default="intfloat/multilingual-e5-small")
-    p.add_argument("--cluster-features", type=int, default=0,
-                   help="0=off(순수 per-model). K>0이면 UniRoute식 KMeans(K)의 클러스터별 신호"
-                   "(ψ_weak, ψ_strong)을 회귀 입력 feature로 추가 (per-model×UniRoute 융합). "
-                   "--uniroute-checkpoint 이 주어지면 무시된다.")
-    p.add_argument("--uniroute-checkpoint", type=str, default=None,
-                   help="학습된 UniRoute 체크포인트(.pt)의 centroids/ψ 를 그대로 클러스터 feature로 "
-                   "사용 (예: uniroute_train_model.pt → honest K·Ψ=train 과 '동일'한 클러스터 신호). "
-                   "KMeans를 새로 fit하지 않고 그 설정을 재사용한다.")
     p.add_argument("--cost-weak", type=float, default=0.0,
                    help="R2 risk 목적함수의 weak 비용 c_weak (기본 0, UniRoute식 0/1 cost).")
     p.add_argument("--cost-strong", type=float, default=1.0,
@@ -265,7 +177,7 @@ if __name__ == "__main__":
                    "deferral curve를 안 바꾸고 λ↔threshold 대응만 정한다.")
     args = p.parse_args()
 
-    train_per_model(
+    train_r2_router(
         train_data_path=args.train_data,
         npy_path=args.npy_path,
         output_path=args.output_path,
@@ -276,8 +188,6 @@ if __name__ == "__main__":
         train_ratio=args.train_ratio,
         seed=args.seed,
         embedding_model=args.embedding_model,
-        cluster_features=args.cluster_features,
-        uniroute_checkpoint=args.uniroute_checkpoint,
         cost_weak=args.cost_weak,
         cost_strong=args.cost_strong,
     )
