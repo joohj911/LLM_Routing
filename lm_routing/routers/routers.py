@@ -129,6 +129,16 @@ class UniRouteTrainRouter(UniRouteRouter):
 
 
 @no_parallel
+class UniR2Router(UniRouteRouter):
+    """R2-Router 의 UniRoute 결합(Uni-R2, unirouter/uni_r2.py)을 2-모델·단일 budget·
+    cost∈{0,1} 로 특수화한 것. Uni-R2 는 품질을 Φ(x)·Ψ(h) — soft 클러스터 멤버십 Φ 와
+    클러스터별 품질 Ψ 의 내적 — 으로 예측하고 R2 risk 로 라우팅한다. 우리 설정에선
+    honest K, Ψ=train 에 **soft assignment** 를 쓴 UniRoute 체크포인트와 동일하다
+    (train_uniroute --assignment soft --psi-source train). 런타임은 UniRouteRouter 와
+    같고(체크포인트의 assignment=soft 로 자동 분기), 별도 이름으로 비교하기 위한 subclass."""
+
+
+@no_parallel
 class UniRouteLegacyRouter(UniRouteRouter):
     """UniRoute variant whose K was chosen with the legacy circular procedure
     (Ψ estimated on val and scored on the same val), i.e. trained with
@@ -181,6 +191,7 @@ ROUTER_CLS = {
     "random": RandomRouter,
     "uniroute": UniRouteRouter,
     "uniroute_train": UniRouteTrainRouter,
+    "uni_r2": UniR2Router,
     "uniroute_legacy": UniRouteLegacyRouter,
     "permodel": PerModelRouter,
     "permodel_cluster": PerModelClusterRouter,

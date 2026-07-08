@@ -258,6 +258,33 @@ python lm_routing/routers/uniroute/train_uniroute.py \
   --psi-source   train \
   --embedding-model "${EMB_MODEL}"
 
+# Uni-R2 (R2-Router unirouter/uni_r2.py) 충실 재현: honest K, Ψ=train 은 위와 같고
+# assignment 를 soft(Φ·Ψ, softmax 클러스터 멤버십)로 바꾼 것. hard uniroute_train 과
+# 나란히 두면 COMPARISON.md 의 "UniRouter(hard) vs Uni-R2(soft)" 대비가 된다.
+echo "  Pair A Uni-R2(soft Φ·Ψ) → ${DATA_0_8B}/uni_r2_model.pt"
+python lm_routing/routers/uniroute/train_uniroute.py \
+  --train-data   "${DATA_0_8B}/train_data.json" \
+  --npy-path     "${BFCL_DIR}/embeddings.npy" \
+  --output-path  "${DATA_0_8B}/uni_r2_model.pt" \
+  --seed         "${SEED}" \
+  --weak-model   "${WEAK_0_8B}" \
+  --strong-model "${STRONG}" \
+  --assignment   soft \
+  --psi-source   train \
+  --embedding-model "${EMB_MODEL}"
+
+echo "  Pair B Uni-R2(soft Φ·Ψ) → ${DATA_2B}/uni_r2_model.pt"
+python lm_routing/routers/uniroute/train_uniroute.py \
+  --train-data   "${DATA_2B}/train_data.json" \
+  --npy-path     "${BFCL_DIR}/embeddings.npy" \
+  --output-path  "${DATA_2B}/uni_r2_model.pt" \
+  --seed         "${SEED}" \
+  --weak-model   "${WEAK_2B}" \
+  --strong-model "${STRONG}" \
+  --assignment   soft \
+  --psi-source   train \
+  --embedding-model "${EMB_MODEL}"
+
 # UniRoute variant: legacy circular K-selection (Ψ estimated on val and scored on
 # the same val → overfits, tends to pick large K). Kept only to compare that old
 # behaviour against the honest K-selection on the held-out test set.
@@ -334,11 +361,12 @@ mkdir -p "${RESULT_0_8B}" "${RESULT_2B}"
 
 echo "  Pair A → ${RESULT_0_8B}/eval_results.json"
 python -m lm_routing.evals.evaluate \
-  --routers random mf uniroute uniroute_train uniroute_legacy permodel permodel_cluster \
+  --routers random mf uniroute uniroute_train uni_r2 uniroute_legacy permodel permodel_cluster \
   --test-data         "${DATA_0_8B}/test_data.json" \
   --mf-checkpoint     "${DATA_0_8B}/mf_model.pt" \
   --uniroute-checkpoint "${DATA_0_8B}/uniroute_model.pt" \
   --uniroute-train-checkpoint "${DATA_0_8B}/uniroute_train_model.pt" \
+  --uni-r2-checkpoint "${DATA_0_8B}/uni_r2_model.pt" \
   --uniroute-legacy-checkpoint "${DATA_0_8B}/uniroute_legacy_model.pt" \
   --permodel-checkpoint "${DATA_0_8B}/permodel_model.pt" \
   --permodel-cluster-checkpoint "${DATA_0_8B}/permodel_cluster_model.pt" \
@@ -347,18 +375,19 @@ python -m lm_routing.evals.evaluate \
   --output            "${RESULT_0_8B}" \
   --num-results       "${NUM_RESULTS}" \
   --random-iters      "${RANDOM_ITERS}" \
-  --overwrite-cache   mf uniroute uniroute_train uniroute_legacy permodel permodel_cluster \
+  --overwrite-cache   mf uniroute uniroute_train uni_r2 uniroute_legacy permodel permodel_cluster \
   --seed              "${SEED}" \
   --quiet \
   --output-json       "${RESULT_0_8B}/eval_results.json"
 
 echo "  Pair B → ${RESULT_2B}/eval_results.json"
 python -m lm_routing.evals.evaluate \
-  --routers random mf uniroute uniroute_train uniroute_legacy permodel permodel_cluster \
+  --routers random mf uniroute uniroute_train uni_r2 uniroute_legacy permodel permodel_cluster \
   --test-data         "${DATA_2B}/test_data.json" \
   --mf-checkpoint     "${DATA_2B}/mf_model.pt" \
   --uniroute-checkpoint "${DATA_2B}/uniroute_model.pt" \
   --uniroute-train-checkpoint "${DATA_2B}/uniroute_train_model.pt" \
+  --uni-r2-checkpoint "${DATA_2B}/uni_r2_model.pt" \
   --uniroute-legacy-checkpoint "${DATA_2B}/uniroute_legacy_model.pt" \
   --permodel-checkpoint "${DATA_2B}/permodel_model.pt" \
   --permodel-cluster-checkpoint "${DATA_2B}/permodel_cluster_model.pt" \
@@ -367,7 +396,7 @@ python -m lm_routing.evals.evaluate \
   --output            "${RESULT_2B}" \
   --num-results       "${NUM_RESULTS}" \
   --random-iters      "${RANDOM_ITERS}" \
-  --overwrite-cache   mf uniroute uniroute_train uniroute_legacy permodel permodel_cluster \
+  --overwrite-cache   mf uniroute uniroute_train uni_r2 uniroute_legacy permodel permodel_cluster \
   --seed              "${SEED}" \
   --quiet \
   --output-json       "${RESULT_2B}/eval_results.json"

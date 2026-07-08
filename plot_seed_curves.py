@@ -152,7 +152,8 @@ DEFAULT_BEST_METHODS = ["mf", "uniroute_train"]
 # best 그래프에서만 쓰는 '보기 좋은' 라벨(없으면 collect_results.METHOD_LABEL 사용).
 BEST_LABEL = {
     "mf": "MF Router",                       # tie→strong
-    "uniroute_train": "UniRoute (K-Means)",  # honest K, Ψ=train
+    "uniroute_train": "UniRoute (K-Means)",  # honest K, Ψ=train (hard)
+    "uni_r2": "Uni-R2 (soft Φ·Ψ)",           # R2-Router UniRoute fusion
 }
 
 
@@ -241,7 +242,7 @@ def main():
         # (1) 전체 method 밴드 (임베딩마다 별도 그림 → e5 / cscr 분리)
         if args.figures in ("both", "all"):
             base = args.all_methods or [
-                "mf", "uniroute", "uniroute_train", "uniroute_legacy",
+                "mf", "uniroute", "uniroute_train", "uni_r2", "uniroute_legacy",
                 "permodel", "permodel_cluster",
             ]
             all_methods = (["random"] if args.graph_random else []) + base

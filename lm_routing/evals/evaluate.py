@@ -233,6 +233,14 @@ if __name__ == "__main__":
         "(sets uniroute_train.checkpoint_path). Lets the val-Ψ and train-Ψ variants be compared on test.",
     )
     parser.add_argument(
+        "--uni-r2-checkpoint",
+        type=str,
+        default=None,
+        help="Shortcut: path to a UniRoute checkpoint trained with --assignment soft "
+        "(honest K, Ψ=train); sets uni_r2.checkpoint_path. Faithful reduction of "
+        "R2-Router's Uni-R2 (soft Φ·Ψ) for a test-set comparison against hard uniroute.",
+    )
+    parser.add_argument(
         "--uniroute-legacy-checkpoint",
         type=str,
         default=None,
@@ -291,6 +299,8 @@ if __name__ == "__main__":
             config["uniroute"] = {"checkpoint_path": args.uniroute_checkpoint}
         if args.uniroute_train_checkpoint:
             config["uniroute_train"] = {"checkpoint_path": args.uniroute_train_checkpoint}
+        if args.uni_r2_checkpoint:
+            config["uni_r2"] = {"checkpoint_path": args.uni_r2_checkpoint}
         if args.uniroute_legacy_checkpoint:
             config["uniroute_legacy"] = {"checkpoint_path": args.uniroute_legacy_checkpoint}
         if args.permodel_checkpoint:
