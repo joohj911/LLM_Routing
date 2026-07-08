@@ -98,6 +98,9 @@ class MFModel(torch.nn.Module, PyTorchModelHubMixin):
             device=str(self.get_device()),
             normalize_embeddings=embed_normalize(self.embedding_model),
         )
+        # Qwen3-Embedding 등은 bf16 텐서를 내놓아 float32 가중치와 dtype 불일치가 난다.
+        # MF 파라미터 dtype(float32)으로 맞춘다.
+        prompt_embed = prompt_embed.to(self.P.weight.dtype)
         if self.use_proj:
             prompt_embed = self.text_proj(prompt_embed)
 
