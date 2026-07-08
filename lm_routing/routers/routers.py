@@ -5,7 +5,8 @@ import random
 import numpy as np
 import torch
 
-from lm_routing.routers.matrix_factorization.model import MFModel, get_embedding_model, format_query
+from lm_routing.routers.matrix_factorization.model import (
+    MFModel, get_embedding_model, format_query, embed_normalize)
 
 
 def no_parallel(cls):
@@ -114,7 +115,7 @@ class UniRouteRouter(Router):
         emb = self._embed.encode(
             format_query(prompt, self.model.embedding_model),
             convert_to_tensor=False,
-            normalize_embeddings=False,
+            normalize_embeddings=embed_normalize(self.model.embedding_model),
         )
         return self.model.predict(np.asarray(emb, dtype=np.float32))
 
@@ -172,7 +173,7 @@ class R2Router(Router):
         emb = self._embed.encode(
             format_query(prompt, self.model.embedding_model),
             convert_to_tensor=False,
-            normalize_embeddings=False,
+            normalize_embeddings=embed_normalize(self.model.embedding_model),
         )
         return self.model.predict(np.asarray(emb, dtype=np.float32))
 
@@ -198,7 +199,7 @@ class CSCRRouter(Router):
         emb = self._embed.encode(
             format_query(prompt, self.model.embedding_model),
             convert_to_tensor=False,
-            normalize_embeddings=False,
+            normalize_embeddings=embed_normalize(self.model.embedding_model),
         )
         return self.model.predict(np.asarray(emb, dtype=np.float32))
 

@@ -32,6 +32,12 @@ def format_query(prompt: str, embedding_model: str) -> str:
     return f"query: {prompt}"
 
 
+def embed_normalize(embedding_model: str) -> bool:
+    """Qwen3-Embedding 은 last-token pooling + ℓ2 정규화가 기본 권장이라 정규화한다.
+    e5 계열은 기존대로 raw. 오프라인 임베딩과 라우터 추론이 동일 설정을 써야 한다."""
+    return "qwen3-embedding" in (embedding_model or "").lower()
+
+
 def build_classifier(dim: int, num_classes: int, mlp_hidden: int = 0):
     """
     분류기 head 생성. mlp_hidden=0 이면 기존 선형(bias 없음), >0 이면 1-hidden MLP.
@@ -85,11 +91,12 @@ class MFModel(torch.nn.Module, PyTorchModelHubMixin):
         model_embed = self.P(model_id)
         model_embed = torch.nn.functional.normalize(model_embed, p=2, dim=1)
 
-        # 임베딩 모델별 권장 입력 형식 (e5 "query:" / Qwen3-Embedding instruct)
+        # 임베딩 모델별 권장 입력 형식 (e5 "query:" / Qwen3-Embedding instruct) + 정규화 규약
         prompt_embed = get_embedding_model(self.embedding_model).encode(
             format_query(prompt, self.embedding_model),
             convert_to_tensor=True,
             device=str(self.get_device()),
+            normalize_embeddings=embed_normalize(self.embedding_model),
         )
         if self.use_proj:
             prompt_embed = self.text_proj(prompt_embed)
