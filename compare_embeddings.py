@@ -104,6 +104,32 @@ def _ms(xs):
     return (float(a.mean()), float(a.std())) if len(a) else (float("nan"), float("nan"))
 
 
+def op_weak_from_curve(mean, target):
+    """seed평균 deferral 곡선(GRID strong% 축의 pass%)이 pass=target 에 처음 도달하는
+    strong% 를 선형보간으로 찾아 weak% = 100 − strong% 반환. 이 값을 쓰면 그래프의 점이
+    '곡선 ∩ (strong−drop) 수평선' 에 정확히 얹히고, 표/legend 수치와도 완전히 일치한다."""
+    mean = np.asarray(mean, dtype=float)
+    idx = np.where(mean >= target)[0]
+    if len(idx) == 0:
+        return 0.0            # target 도달 못함 → 전부 strong 필요 → weak%=0
+    j = int(idx[0])
+    if j == 0:
+        return 100.0          # 0% strong(전부 weak)도 이미 target 이상 → weak%=100
+    x0, y0, x1, y1 = GRID[j - 1], mean[j - 1], GRID[j], mean[j]
+    xs = x0 if y1 == y0 else x0 + (target - y0) / (y1 - y0) * (x1 - x0)
+    return float(100.0 - xs)
+
+
+def op_weak(P, m):
+    """(emb,pair,method) 의 operating-point weak% + 표시용 seed std. 없으면 (nan,nan)."""
+    if m not in P["curves"] or not P["curves"][m]:
+        return float("nan"), float("nan")
+    mean = np.vstack(P["curves"][m]).mean(0)
+    target = float(np.mean(P["strong"])) - P["drop"]
+    _, wstd = _ms(P["weak_interp"][m])   # seed 변동(밴드/±) 지표
+    return op_weak_from_curve(mean, target), wstd
+
+
 def make_graph(emb, pairs, drop, out_png):
     plist = list(pairs.keys())
     fig, axes = plt.subplots(1, len(plist), figsize=(7 * len(plist), 5.5))
@@ -112,21 +138,20 @@ def make_graph(emb, pairs, drop, out_png):
     for ax, pair in zip(axes, plist):
         P = pairs[pair]
         wk = float(np.mean(P["weak"])); sg = float(np.mean(P["strong"])); dr = P["drop"]
+        target = sg - dr
         for m in KEYS:
             if m not in P["curves"]:
                 continue
             arr = np.vstack(P["curves"][m]); mean = arr.mean(0); std = arr.std(0)
-            wmean, wstd = _ms(P["weak_interp"][m])
-            wtxt = f"  ({wmean:.1f}±{wstd:.1f}% @−{dr:.0f}%p)" if not np.isnan(wmean) else ""
+            ow, wstd = op_weak(P, m)   # 평균 곡선 ∩ (strong−drop) 의 weak% + seed std
+            wtxt = f"  ({ow:.1f}±{wstd:.1f}% @−{dr:.0f}%p)" if not np.isnan(ow) else ""
             ax.plot(GRID, mean, color=COLOR[m], lw=2.2, label=f"{LABEL[m]}{wtxt}")
             ax.fill_between(GRID, mean - std, mean + std, color=COLOR[m], alpha=0.13, lw=0)
-            if not np.isnan(wmean):
-                # headline weak%(=Excel 값)의 x 에서 '그려진 평균 곡선 위' 점을 찍는다.
-                # (y 를 strong−drop 로 고정하면 fine/coarse·평균순서 차이로 점이 선을 벗어남)
-                x = 100.0 - wmean
-                y = float(np.interp(x, GRID, mean))
-                ax.plot([x], [y], "o", color=COLOR[m], ms=7, zorder=5)
-                ax.annotate(f"{wmean:.1f}%", (x, y), textcoords="offset points",
+            if not np.isnan(ow):
+                # 점 = 곡선 ∩ (strong−drop): x=100−weak%(=strong%), y=target. 정확히 선 위·수평선 위.
+                x = 100.0 - ow
+                ax.plot([x], [target], "o", color=COLOR[m], ms=7, zorder=5)
+                ax.annotate(f"{ow:.1f}%", (x, target), textcoords="offset points",
                             xytext=(4, 5), fontsize=8, fontweight="bold", color=COLOR[m])
         ax.axhline(wk, color="#555", ls=":", lw=1.0, label=f"Weak only ({wk:.1f}%)")
         ax.axhline(sg, color="#C62828", ls=":", lw=1.0, label=f"Strong only ({sg:.1f}%)")
@@ -154,22 +179,22 @@ def main():
     for emb, pairs in by_emb.items():
         make_graph(emb, pairs, None, f"{args.output_prefix}_{emb}.png")
 
-    # (2) 임베딩별 표 + 비교표 (모두 보간 weak% 및 AUC, seed 평균±std)
+    # (2) 임베딩별 표 + 비교표. weak% = 그래프 점과 동일한 '평균 곡선 ∩ strong−drop' 보간값.
     rows = []          # 임베딩별 상세
     for emb, pairs in by_emb.items():
         for pair, P in pairs.items():
             dr = P["drop"]
             for m in KEYS:
-                if m not in P["weak_interp"] and m not in P["auc"]:
+                if m not in P["curves"]:
                     continue
-                wmean, wstd = _ms(P["weak_interp"][m])
+                ow, wstd = op_weak(P, m)
                 amean, astd = _ms(P["auc"][m])
                 rows.append({
                     "Embedding": emb, "Pair": pair, "Method": LABEL[m],
-                    "Weak@-{:.0f}%p interp mean (%)".format(dr): round(wmean, 2),
-                    "Weak interp std": round(wstd, 2),
+                    "Weak@-{:.0f}%p (interp) %".format(dr): round(ow, 2),
+                    "Weak seed-std": round(wstd, 2),
                     "AUC mean": round(amean, 3), "AUC std": round(astd, 3),
-                    "n_seeds": len(P["weak_interp"][m]),
+                    "n_seeds": len(P["curves"][m]),
                 })
     detail = pd.DataFrame(rows)
 
@@ -181,8 +206,10 @@ def main():
         for pair in sorted(pairs_all):
             Pb, Pn = by_emb[base][pair], by_emb[new][pair]
             for m in KEYS:
-                wb, _ = _ms(Pb["weak_interp"][m]); wn, _ = _ms(Pn["weak_interp"][m])
-                ab, _ = _ms(Pb["auc"][m]);         an, _ = _ms(Pn["auc"][m])
+                if m not in Pb["curves"] or m not in Pn["curves"]:
+                    continue
+                wb, _ = op_weak(Pb, m); wn, _ = op_weak(Pn, m)
+                ab, _ = _ms(Pb["auc"][m]); an, _ = _ms(Pn["auc"][m])
                 comp_rows.append({
                     "Pair": pair, "Method": LABEL[m],
                     f"Weak% ({base})": round(wb, 2), f"Weak% ({new})": round(wn, 2),
