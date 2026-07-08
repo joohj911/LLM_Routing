@@ -140,10 +140,12 @@ class UniRouteLegacyRouter(UniRouteRouter):
 @no_parallel
 class PerModelRouter(Router):
     """
-    Per-model regression router (R2-Router 골격, budget 제거).
+    Per-model regression router = R2-Router 의 per-model 라우터(r2_router/router.py)를
+    2-모델·단일 budget·cost∈{0,1} 로 특수화한 것.
 
-    weak/strong 각각 P(pass | 임베딩)를 독립 회귀로 예측 →
-    strong_win_rate = (P_strong − P_weak + 1)/2. 높을수록 strong.
+    weak/strong 각각 Ridge 회귀로 P(pass | 임베딩)를 예측하고, R2 risk
+    (1−λ)·quality − λ·cost 를 최대화하면 2모델에선 gain P_strong−P_weak 순 라우팅과
+    동치가 된다 → strong_win_rate = (P_strong − P_weak + 1)/2 를 threshold 스윕(=λ 스윕).
     """
 
     def __init__(self, checkpoint_path: str, **kwargs):

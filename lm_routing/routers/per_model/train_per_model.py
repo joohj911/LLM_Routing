@@ -1,8 +1,22 @@
 """
-모델별 회귀 라우터 학습 스크립트.
+모델별 회귀 라우터 학습 스크립트 (R2-Router per-model 예측기).
 
-각 모델(weak, strong)에 대해 임베딩 → P(pass) 회귀기를 독립 학습하고,
-라우팅 점수 = (P_strong − P_weak + 1)/2 로 deferral curve를 그린다.
+R2-Router(github: UCF-ML-Research/R2-Router)의 메인 라우터(`r2_router/router.py`)는
+LLM마다 쿼리 임베딩 → 품질을 예측하는 **Ridge 회귀기**를 두고, risk 목적함수
+    risk(h) = (1−λ)·quality(h) − λ·cost(h)
+를 모든 (model, budget) 조합에서 최대화해 라우팅한다. 여기서는 2-모델·짧은 출력
+설정이라 (a) budget tier를 단일('unlimited')로 접고, (b) cost 를 화폐가 아니라
+UniRoute처럼 c_weak=0, c_strong=1 로 둔다.
+
+이 두 축소는 임의 삭제가 아니라 정당한 특수화다: 2모델·상수 cost에서는
+    strong 선택 ⟺ (1−λ)(P_s − P_w) > λ(c_s − c_w) ⟺ (P_s − P_w) > λ/(1−λ)·Δc
+가 되어, **라우팅 순서는 오직 gain P_s−P_w 로만 결정**된다(상수 cost는 프롬프트 순위를
+안 바꾸고 λ↔threshold 대응만 바꾼다). 따라서 λ 스윕 = threshold 스윕이고 deferral
+curve가 동일하다. BFCL은 함수호출 출력이 짧고 균일해 budget-conditioned 품질이 하나로
+접혀 정보 손실도 없다.
+
+각 모델(weak, strong)에 대해 임베딩 → P(pass) Ridge 회귀기를 독립 학습하고,
+라우팅 점수 = (P_strong − P_weak + 1)/2 (gain에 단조) 로 deferral curve를 그린다.
 
 사용법:
   python lm_routing/routers/per_model/train_per_model.py \\
@@ -126,13 +140,15 @@ def train_per_model(
     output_path: str,
     weak_model: str,
     strong_model: str,
-    regressor: str = "logistic",
+    regressor: str = "ridge",
     reg_C: float = 1.0,
     train_ratio: float = 0.8,
     seed: int = 42,
     embedding_model: str = "intfloat/multilingual-e5-small",
     cluster_features: int = 0,
     uniroute_checkpoint: str = None,
+    cost_weak: float = 0.0,
+    cost_strong: float = 1.0,
 ) -> dict:
     print(f"\nLoading train data from {train_data_path}")
     df = pd.read_json(train_data_path)
@@ -197,6 +213,8 @@ def train_per_model(
         "embedding_model": embedding_model,
         "embedding_prefix": "query: ",
         "cluster_features": int(cluster_features or 0),
+        "cost_weak": float(cost_weak),      # R2 risk 목적함수의 cost(h). 2모델·상수 cost →
+        "cost_strong": float(cost_strong),  #   curve 불변, λ↔threshold 대응만 정함.
     }
     if use_uniroute:
         # UniRoute 체크포인트의 centroids/ψ 를 그대로 최종 feature에 사용 (재학습 없음).
@@ -225,8 +243,8 @@ if __name__ == "__main__":
     p.add_argument("--output-path", required=True)
     p.add_argument("--weak-model", required=True)
     p.add_argument("--strong-model", required=True)
-    p.add_argument("--regressor", choices=["logistic", "ridge"], default="logistic",
-                   help="logistic=P(pass) 로지스틱(기본), ridge=0/1 선형회귀 후 clip")
+    p.add_argument("--regressor", choices=["logistic", "ridge"], default="ridge",
+                   help="ridge=0/1 선형회귀 후 clip(R2-Router 기본), logistic=P(pass) 로지스틱")
     p.add_argument("--reg-C", type=float, default=1.0,
                    help="logistic: 역정규화 강도 C (작을수록 강한 정규화). ridge: alpha=1/C")
     p.add_argument("--train-ratio", type=float, default=0.8)
@@ -240,6 +258,11 @@ if __name__ == "__main__":
                    help="학습된 UniRoute 체크포인트(.pt)의 centroids/ψ 를 그대로 클러스터 feature로 "
                    "사용 (예: uniroute_train_model.pt → honest K·Ψ=train 과 '동일'한 클러스터 신호). "
                    "KMeans를 새로 fit하지 않고 그 설정을 재사용한다.")
+    p.add_argument("--cost-weak", type=float, default=0.0,
+                   help="R2 risk 목적함수의 weak 비용 c_weak (기본 0, UniRoute식 0/1 cost).")
+    p.add_argument("--cost-strong", type=float, default=1.0,
+                   help="R2 risk 목적함수의 strong 비용 c_strong (기본 1). 2모델·상수 cost는 "
+                   "deferral curve를 안 바꾸고 λ↔threshold 대응만 정한다.")
     args = p.parse_args()
 
     train_per_model(
@@ -255,4 +278,6 @@ if __name__ == "__main__":
         embedding_model=args.embedding_model,
         cluster_features=args.cluster_features,
         uniroute_checkpoint=args.uniroute_checkpoint,
+        cost_weak=args.cost_weak,
+        cost_strong=args.cost_strong,
     )
