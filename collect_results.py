@@ -113,6 +113,8 @@ METHOD_STYLE = {
     "uniroute":        {"color": "#FF9800", "linestyle": "-",  "linewidth": 2.0, "marker": "s"},
     "uniroute_train":  {"color": "#E91E63", "linestyle": "-",  "linewidth": 2.0, "marker": "D"},
     "uniroute_legacy": {"color": "#9C27B0", "linestyle": ":",  "linewidth": 2.0, "marker": "x"},
+    "permodel":        {"color": "#4CAF50", "linestyle": "-",  "linewidth": 2.0, "marker": "^"},
+    "permodel_cluster":{"color": "#009688", "linestyle": "-",  "linewidth": 2.0, "marker": "v"},
 }
 METHOD_LABEL = {
     "random":          "Random",
@@ -121,6 +123,8 @@ METHOD_LABEL = {
     "uniroute":        "UniRoute (honest K, Ψ=val)",
     "uniroute_train":  "UniRoute (honest K, Ψ=train)",
     "uniroute_legacy": "UniRoute (legacy K=circular)",
+    "permodel":        "Per-model Regression",
+    "permodel_cluster":"Per-model + cluster feats",
 }
 
 
@@ -135,7 +139,7 @@ def make_graphs(entries: list[dict], output_png: str, include_random: bool = Fal
     weak/strong 기준선은 임베딩과 무관하므로 pair당 한 번만.
     random은 사실상 대각선 baseline이라 기본적으로 그래프에서 제외(데이터 표엔 유지).
     """
-    methods = (["random"] if include_random else []) + ["mf", "mf_tieweak", "uniroute", "uniroute_train", "uniroute_legacy"]
+    methods = (["random"] if include_random else []) + ["mf", "mf_tieweak", "uniroute", "uniroute_train", "uniroute_legacy", "permodel", "permodel_cluster"]
     # pair 순서 보존
     pairs = list(dict.fromkeys(e["label"] for e in entries))
     embeddings = list(dict.fromkeys(e["embedding"] for e in entries))

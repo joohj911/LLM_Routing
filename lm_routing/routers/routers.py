@@ -146,6 +146,43 @@ class MFTieWeakRouter(MatrixFactorizationRouter):
     can be compared under its own router name against the default (tie→strong)."""
 
 
+@no_parallel
+class PerModelRouter(Router):
+    """
+    Per-model regression router (R2-Router 골격, budget 제거).
+
+    weak/strong 각각 P(pass | 임베딩)를 독립 회귀로 예측 →
+    strong_win_rate = (P_strong − P_weak + 1)/2. 높을수록 strong.
+    """
+
+    def __init__(self, checkpoint_path: str, **kwargs):
+        if not os.path.isfile(checkpoint_path):
+            raise ValueError(
+                f"Per-model router checkpoint not found: {checkpoint_path}\n"
+                "Train with lm_routing/routers/per_model/train_per_model.py first."
+            )
+        from lm_routing.routers.per_model.model import PerModelRouterModel
+        self.model = PerModelRouterModel.load(checkpoint_path)
+        self._embed = get_embedding_model(self.model.embedding_model)
+
+    def calculate_strong_win_rate(self, prompt: str) -> float:
+        emb = self._embed.encode(
+            f"query: {prompt}",
+            convert_to_tensor=False,
+            normalize_embeddings=False,
+        )
+        return self.model.predict(np.asarray(emb, dtype=np.float32))
+
+
+@no_parallel
+class PerModelClusterRouter(PerModelRouter):
+    """Per-model regression router whose quality predictor is augmented with
+    UniRoute-style per-cluster pass rates as input features (trained with
+    --cluster-features K > 0). Identical runtime path to PerModelRouter — the
+    cluster augmentation is driven by fields in the checkpoint; this is a
+    separate class only so it can be compared under its own router name."""
+
+
 ROUTER_CLS = {
     "mf": MatrixFactorizationRouter,
     "mf_tieweak": MFTieWeakRouter,
@@ -153,5 +190,7 @@ ROUTER_CLS = {
     "uniroute": UniRouteRouter,
     "uniroute_train": UniRouteTrainRouter,
     "uniroute_legacy": UniRouteLegacyRouter,
+    "permodel": PerModelRouter,
+    "permodel_cluster": PerModelClusterRouter,
 }
 NAME_TO_CLS = {v: k for k, v in ROUTER_CLS.items()}

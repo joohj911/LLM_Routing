@@ -10,9 +10,17 @@ _EMBEDDING_MODELS = {}
 
 
 def get_embedding_model(name: str = DEFAULT_EMBEDDING_MODEL):
-    """이름별로 SentenceTransformer를 캐시. e5-small/e5-large 등 혼용 가능."""
+    """이름별로 임베딩 모델을 캐시. e5-small/e5-large 등 혼용 가능.
+
+    이름이 "cscr:<head.pt>" 형식이면 대조학습된 head를 얹은 CSCREncoder를 반환한다
+    (frozen e5 → g_θ). SentenceTransformer와 동일한 .encode() 인터페이스라
+    라우터 코드 변경 없이 학습/추론에서 동일한 변환이 적용된다."""
     if name not in _EMBEDDING_MODELS:
-        _EMBEDDING_MODELS[name] = SentenceTransformer(name)
+        if isinstance(name, str) and name.startswith("cscr:"):
+            from lm_routing.routers.contrastive.model import CSCREncoder
+            _EMBEDDING_MODELS[name] = CSCREncoder.load(name[len("cscr:"):])
+        else:
+            _EMBEDDING_MODELS[name] = SentenceTransformer(name)
     return _EMBEDDING_MODELS[name]
 
 

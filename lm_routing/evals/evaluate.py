@@ -246,6 +246,19 @@ if __name__ == "__main__":
         help="Shortcut: path to a UniRoute checkpoint whose K used the legacy circular selection "
         "(--k-select-psi val); sets uniroute_legacy.checkpoint_path for a test-set comparison.",
     )
+    parser.add_argument(
+        "--permodel-checkpoint",
+        type=str,
+        default=None,
+        help="Shortcut: path to local .pt per-model regression router checkpoint (sets permodel.checkpoint_path in config)",
+    )
+    parser.add_argument(
+        "--permodel-cluster-checkpoint",
+        type=str,
+        default=None,
+        help="Shortcut: path to a per-model checkpoint trained with --cluster-features K "
+        "(sets permodel_cluster.checkpoint_path) for a UniRoute-informed per-model comparison.",
+    )
     parser.add_argument("--num-results", type=int, default=10)
     parser.add_argument("--random-iters", type=int, default=10)
     parser.add_argument("--seed", type=int, default=42,
@@ -293,6 +306,10 @@ if __name__ == "__main__":
             config["uniroute_train"] = {"checkpoint_path": args.uniroute_train_checkpoint}
         if args.uniroute_legacy_checkpoint:
             config["uniroute_legacy"] = {"checkpoint_path": args.uniroute_legacy_checkpoint}
+        if args.permodel_checkpoint:
+            config["permodel"] = {"checkpoint_path": args.permodel_checkpoint}
+        if args.permodel_cluster_checkpoint:
+            config["permodel_cluster"] = {"checkpoint_path": args.permodel_cluster_checkpoint}
         if not config:
             config = None
 

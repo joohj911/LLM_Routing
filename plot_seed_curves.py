@@ -136,16 +136,23 @@ def _figure(pairs, methods_for, out_png, title):
     print(f"Saved → {out_png}")
 
 
-# best 그래프에 고정으로 보여줄 (method, legend 라벨)
-FIXED_BEST = [
-    ("mf", "MF Router"),                 # tie→strong
-    ("uniroute_train", "UniRoute (K-Means)"),  # honest K, Ψ=train
-]
+# best 그래프의 기본 선택(method 키). --best-methods 로 사용자가 자유롭게 바꾼다.
+DEFAULT_BEST_METHODS = ["mf", "uniroute_train"]
+# best 그래프에서만 쓰는 '보기 좋은' 라벨(없으면 collect_results.METHOD_LABEL 사용).
+BEST_LABEL = {
+    "mf": "MF Router",                       # tie→strong
+    "uniroute_train": "UniRoute (K-Means)",  # honest K, Ψ=train
+}
 
 
-def _figure_best(pairs, out_png, title):
-    """고정 선택(MF tie→strong / UniRoute honest·Ψ=train) 밴드 그래프.
+def _best_label(method):
+    return BEST_LABEL.get(method, METHOD_LABEL.get(method, method))
+
+
+def _figure_best(pairs, out_png, title, best_methods):
+    """사용자가 고른 best_methods 밴드 그래프(기본 MF tie→strong / UniRoute honest·Ψ=train).
     strong−drop%p 에서의 평균 weak% 를 마커+주석으로 표시하고 콘솔에도 출력."""
+    fixed_best = [(m, _best_label(m)) for m in best_methods]
     plist = list(pairs.keys())
     fig, axes = plt.subplots(1, len(plist), figsize=(7 * len(plist), 5.5))
     if len(plist) == 1:
@@ -154,7 +161,7 @@ def _figure_best(pairs, out_png, title):
         P = pairs[pair]
         wk = float(np.mean(P["weak"])); sg = float(np.mean(P["strong"])); drop = P["drop"]
         print(f"\n[{pair}]  weak@(strong−{drop:.0f}%p) average weak model %:")
-        for method, label in FIXED_BEST:
+        for method, label in fixed_best:
             if method not in P["methods"]:
                 continue
             arr = np.vstack(P["methods"][method]); mean = arr.mean(0); std = arr.std(0)
@@ -198,22 +205,30 @@ def main():
     ap.add_argument("--graph-random", action="store_true",
                     help="전체 그래프에 random baseline도 포함")
     ap.add_argument("--figures", choices=["both", "all", "best"], default="both",
-                    help="어떤 그림을 만들지: both(기본) / all(전체 method) / best(고정 2개만)")
+                    help="어떤 그림을 만들지: both(기본) / all(전체 method) / best(선택 method만)")
+    ap.add_argument("--best-methods", nargs="+", default=DEFAULT_BEST_METHODS,
+                    help="best 그래프에 그릴 method 키들 (기본: mf uniroute_train). "
+                    "예: --best-methods mf uniroute_train permodel_cluster")
+    ap.add_argument("--all-methods", nargs="+", default=None,
+                    help="all 그래프에 그릴 method 키들 (기본: 등록된 전체). 필터링용.")
     args = ap.parse_args()
 
     pairs = load_runs(args.results_jsons)
 
     # (1) 전체 method 밴드
     if args.figures in ("both", "all"):
-        base = ["mf", "mf_tieweak", "uniroute", "uniroute_train", "uniroute_legacy"]
+        base = args.all_methods or [
+            "mf", "mf_tieweak", "uniroute", "uniroute_train", "uniroute_legacy",
+            "permodel", "permodel_cluster",
+        ]
         all_methods = (["random"] if args.graph_random else []) + base
         _figure(pairs, lambda pair: all_methods, f"{args.output_prefix}_all.png",
                 "Seed-averaged deferral curves (mean ± 1 std)")
 
-    # (2) best: 고정 선택 (MF Router / UniRoute (K-Means)) + strong−drop 평균 weak% 표시
+    # (2) best: 사용자 선택 method + strong−drop 평균 weak% 표시
     if args.figures in ("both", "best"):
-        _figure_best(pairs, f"{args.output_prefix}_best.png",
-                     "MF Router vs UniRoute (K-Means) — mean ± 1 std")
+        title = " vs ".join(_best_label(m) for m in args.best_methods) + " — mean ± 1 std"
+        _figure_best(pairs, f"{args.output_prefix}_best.png", title, args.best_methods)
 
 
 if __name__ == "__main__":
