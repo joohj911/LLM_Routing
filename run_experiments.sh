@@ -32,6 +32,7 @@ SKIP_EVAL=0
 NUM_RESULTS=10
 RANDOM_ITERS=10
 EMB_MODEL="intfloat/multilingual-e5-small"
+EMBED_BATCH=0                # 임베딩 배치(0=모델별 자동: 큰 백본 32/e5 256). OOM 시 낮춰 지정
 UNIROUTE_ASSIGNMENT="hard"   # 기본 hard(최근접 클러스터). soft 쓰려면 --uniroute-assignment soft|auto
 UNIROUTE_PSI="val"           # Ψ 추정 데이터: val(논문 설계, 기본) | train(전체 refit)
 MF_LR="3e-4"
@@ -56,6 +57,7 @@ while [[ $# -gt 0 ]]; do
     --num-results)    NUM_RESULTS="$2"; shift 2 ;;
     --random-iters)   RANDOM_ITERS="$2"; shift 2 ;;
     --embedding-model) EMB_MODEL="$2"; shift 2 ;;
+    --embed-batch-size) EMBED_BATCH="$2"; shift 2 ;;
     --uniroute-assignment) UNIROUTE_ASSIGNMENT="$2"; shift 2 ;;
     --uniroute-psi)   UNIROUTE_PSI="$2"; shift 2 ;;
     --with-cscr)      WITH_CSCR=1; shift ;;
@@ -122,7 +124,8 @@ if [[ $SKIP_EMBED -eq 0 ]]; then
   echo "[Step 1/7] Generating BFCL embeddings (${EMB_MODEL}) → ${BFCL_DIR}/"
   python lm_routing/routers/matrix_factorization/prepare_bfcl_data.py embed \
     --output-dir "${BFCL_DIR}" \
-    --embedding-model "${EMB_MODEL}"
+    --embedding-model "${EMB_MODEL}" \
+    --embed-batch-size "${EMBED_BATCH}"
 else
   echo ""
   echo "[Step 1/7] Skipping embedding generation (--skip-embed)"

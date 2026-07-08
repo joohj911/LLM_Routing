@@ -38,11 +38,21 @@ for tag in "${EMB_ORDER[@]}"; do
   for seed in "${SEEDS[@]}"; do
     rdir="results_${tag}_seed${seed}"
     mkdir -p "${rdir}"
+    done_marker="${rdir}/pair_2B/eval_results.json"   # run_experiments 의 마지막 산출물
+    if [[ -f "$done_marker" ]]; then
+      echo ""
+      echo "===== [skip] ${tag} seed=${seed} 이미 완료(${done_marker} 존재) ====="
+      # embeddings/descriptor 는 이미 있으니 다음 seed 는 --skip-embed 유지
+      first_overall=0; first_seed=0
+      JSONS+=("${tag}=${rdir}/pair_0.8B/eval_results.json" "${tag}=${rdir}/pair_2B/eval_results.json")
+      continue
+    fi
     flags=(--embedding-model "${model}" --bfcl-dir "${bdir}" --results-dir "${rdir}"
            --output-excel "${rdir}/routing.xlsx" --seed "${seed}" --split-seed "${SPLIT_SEED}"
            --with-cscr)
     [[ $first_overall -eq 0 ]] && flags+=(--skip-eval-models)
-    [[ $first_seed  -eq 0 ]] && flags+=(--skip-embed)
+    # embeddings.npy 가 이미 있으면(이전 seed 또는 이전 실행) 재임베딩 skip
+    [[ -f "${bdir}/embeddings.npy" ]] && flags+=(--skip-embed)
     echo ""
     echo "===== ${tag}  seed=${seed}  → ${rdir} ====="
     bash run_experiments.sh "${flags[@]}" "${EXTRA[@]}"

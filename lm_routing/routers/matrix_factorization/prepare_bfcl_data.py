@@ -41,6 +41,9 @@ import time
 import urllib.error
 import urllib.request
 
+# 가변 길이 배치의 단편화 OOM 완화. torch(=sentence_transformers) import 전에 설정해야 적용됨.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
@@ -156,18 +159,30 @@ def load_bfcl_prompts() -> list[dict]:
 
 
 def generate_embeddings(prompts: list[dict], output_dir: str,
-                        embedding_model: str = "intfloat/multilingual-e5-small"):
-    """지정한 e5 모델로 임베딩 생성 후 .npy와 prompts.json 저장."""
+                        embedding_model: str = "intfloat/multilingual-e5-small",
+                        batch_size: int = 0, max_seq_length: int = 512):
+    """지정한 임베딩 모델로 임베딩 생성 후 .npy와 prompts.json 저장.
+
+    batch_size=0 이면 모델에 맞춰 자동: 큰 백본(Qwen3-Embedding 등)은 프롬프트가 길어
+    256 배치가 수십 GB를 잡아 OOM 나므로 작게(32) 잡는다. max_seq_length 로 시퀀스를
+    잘라 메모리를 bound 한다(e5 기본 512 와 동일하게 두면 e5 vs Qwen 비교도 일관)."""
     os.makedirs(output_dir, exist_ok=True)
 
     print(f"\nLoading {embedding_model} ...")
     model = SentenceTransformer(embedding_model)
+    # 시퀀스 길이 캡(메모리 bound + e5와 동일 조건). 모델 기본이 더 짧으면 그대로 둔다.
+    if max_seq_length and getattr(model, "max_seq_length", 0) and model.max_seq_length > max_seq_length:
+        model.max_seq_length = max_seq_length
+    if batch_size <= 0:
+        # 큰 백본은 작은 배치로 (long tool-augmented prompt 에서 256 배치는 OOM)
+        big = any(k in embedding_model.lower() for k in ("qwen3-embedding", "-large", "bge-m3"))
+        batch_size = 32 if big else 256
 
     # 라우터 추론(format_query)과 반드시 동일한 입력 형식으로 임베딩해야 한다.
     from lm_routing.routers.matrix_factorization.model import format_query, embed_normalize
     texts = [format_query(p["prompt"], embedding_model) for p in prompts]
-    print(f"Encoding {len(texts)} prompts ...")
-    embeddings = model.encode(texts, batch_size=256, show_progress_bar=True,
+    print(f"Encoding {len(texts)} prompts (batch_size={batch_size}, max_seq={model.max_seq_length}) ...")
+    embeddings = model.encode(texts, batch_size=batch_size, show_progress_bar=True,
                               normalize_embeddings=embed_normalize(embedding_model))
 
     npy_path = os.path.join(output_dir, "embeddings.npy")
@@ -337,6 +352,10 @@ if __name__ == "__main__":
         help="e5-small(384d) 또는 intfloat/multilingual-e5-large(1024d) 등. "
         "여기서 쓴 모델을 train_matrix_factorization/train_uniroute의 --embedding-model에도 동일하게 지정.",
     )
+    embed_parser.add_argument("--embed-batch-size", type=int, default=0,
+                              help="0=모델별 자동(큰 백본은 32, e5는 256). OOM 나면 더 작게.")
+    embed_parser.add_argument("--embed-max-seq", type=int, default=512,
+                              help="임베딩 시퀀스 길이 캡(메모리 bound; e5 기본 512와 동일).")
 
     # Step 2: convert (train/test split 포함)
     convert_parser = subparsers.add_parser(
@@ -361,7 +380,8 @@ if __name__ == "__main__":
         print("Loading BFCL splits ...")
         prompts = load_bfcl_prompts()
         print(f"\nTotal unique prompts: {len(prompts)}")
-        generate_embeddings(prompts, args.output_dir, args.embedding_model)
+        generate_embeddings(prompts, args.output_dir, args.embedding_model,
+                             batch_size=args.embed_batch_size, max_seq_length=args.embed_max_seq)
 
     elif args.command == "convert":
         convert_results_to_split_data(
