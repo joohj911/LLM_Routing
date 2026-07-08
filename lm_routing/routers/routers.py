@@ -138,15 +138,6 @@ class UniRouteLegacyRouter(UniRouteRouter):
 
 
 @no_parallel
-class MFTieWeakRouter(MatrixFactorizationRouter):
-    """MF router whose training labeled both-fail prompts as a WEAK win
-    (--tie-goes-to weak), i.e. the cost-aware "prefer the cheaper model when
-    neither is correct" choice. Runtime is identical to MatrixFactorizationRouter
-    (it just loads a differently-trained checkpoint); separate class only so it
-    can be compared under its own router name against the default (tie→strong)."""
-
-
-@no_parallel
 class PerModelRouter(Router):
     """
     Per-model regression router (R2-Router 골격, budget 제거).
@@ -185,7 +176,6 @@ class PerModelClusterRouter(PerModelRouter):
 
 ROUTER_CLS = {
     "mf": MatrixFactorizationRouter,
-    "mf_tieweak": MFTieWeakRouter,
     "random": RandomRouter,
     "uniroute": UniRouteRouter,
     "uniroute_train": UniRouteTrainRouter,

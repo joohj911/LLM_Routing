@@ -220,13 +220,6 @@ if __name__ == "__main__":
         help="Shortcut: path to local .pt MF checkpoint (sets mf.checkpoint_path in config)",
     )
     parser.add_argument(
-        "--mf-tieweak-checkpoint",
-        type=str,
-        default=None,
-        help="Shortcut: path to an MF checkpoint trained with --tie-goes-to weak "
-        "(sets mf_tieweak.checkpoint_path) to compare the both-fail label choice on test.",
-    )
-    parser.add_argument(
         "--uniroute-checkpoint",
         type=str,
         default=None,
@@ -291,12 +284,6 @@ if __name__ == "__main__":
         if args.mf_checkpoint:
             config["mf"] = {
                 "checkpoint_path": args.mf_checkpoint,
-                "strong_model": args.strong_model,
-                "weak_model": args.weak_model,
-            }
-        if args.mf_tieweak_checkpoint:
-            config["mf_tieweak"] = {
-                "checkpoint_path": args.mf_tieweak_checkpoint,
                 "strong_model": args.strong_model,
                 "weak_model": args.weak_model,
             }

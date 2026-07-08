@@ -6,14 +6,17 @@ This fork focuses on **agent/tool-calling routing** using [Qwen3.5](https://hugg
 
 ## Overview
 
-Two routing methods are compared across two model pairs:
+Several routing methods are compared across two model pairs:
 
 | Method | Description |
 |--------|-------------|
 | `random` | Random baseline — uniform routing at each threshold |
 | `mf` | Matrix Factorization router trained on pairwise pass/fail labels (both-fail labeled as a strong win; `--tie-goes-to strong`) |
-| `mf_tieweak` | Same MF, but both-fail prompts labeled as a weak win (`--tie-goes-to weak`) — cost-aware "prefer cheaper when neither is correct" |
 | `uniroute` | UniRoute K-Means cluster-based router ([arXiv:2502.08773](https://arxiv.org/abs/2502.08773)); variants `uniroute_train` (final Ψ on full train) and `uniroute_legacy` (legacy circular K selection) |
+| `permodel` | Per-model regression router (R2-Router skeleton, budget removed): weak/strong each get an independent `P(pass\|emb)` regressor, score = `(P_strong − P_weak + 1)/2` |
+| `permodel_cluster` | `permodel` whose input is augmented with UniRoute per-cluster signals (ψ_weak, ψ_strong); the clusters/ψ are **reused verbatim from the trained UniRoute (honest K, Ψ=train) checkpoint** via `--uniroute-checkpoint`, so the cluster signal is identical to that variant |
+
+CSCR contrastive embedding ([arXiv:2508.12491](https://arxiv.org/abs/2508.12491)) is an alternate embedding (frozen e5 → trained head) applied to all routers via `--embedding-model cscr:<head.pt>`; `run_cscr.sh` retrains/evaluates every router on it and overlays against e5.
 
 **Model pairs evaluated:**
 - Pair A: `Qwen/Qwen3.5-0.8B` (weak) vs `Qwen/Qwen3.5-9B` (strong)

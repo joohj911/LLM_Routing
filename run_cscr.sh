@@ -109,10 +109,12 @@ for k in 0 1; do
     --train-data "${D}/train_data.json" --npy-path "${NPY}" \
     --output-path "${D}/permodel_cscr.pt" --weak-model "${WEAK}" --strong-model "${STRONG}" \
     --embedding-model "${EM}" --seed ${SEED}
+  # permodel_cluster: UniRoute(honest K, Ψ=train)-cscr 클러스터 신호를 그대로 재사용
   python lm_routing/routers/per_model/train_per_model.py \
     --train-data "${D}/train_data.json" --npy-path "${NPY}" \
     --output-path "${D}/permodel_cluster_cscr.pt" --weak-model "${WEAK}" --strong-model "${STRONG}" \
-    --embedding-model "${EM}" --seed ${SEED} --cluster-features ${PMCLUSTER_K}
+    --embedding-model "${EM}" --seed ${SEED} \
+    --uniroute-checkpoint "${D}/uniroute_train_cscr.pt"
 
   echo "[3/3] Evaluate on test → ${R}/eval_results.json"
   python -m lm_routing.evals.evaluate \

@@ -180,14 +180,14 @@ python lm_routing/routers/matrix_factorization/prepare_bfcl_data.py convert \
 echo ""
 echo "[Step 4/7] Training MF routers"
 
-# 각 쌍마다 both-fail 라벨 2변형 학습: mf(tie→strong, 기본) / mf_tieweak(tie→weak)
-train_mf () {  # $1=train_data  $2=output  $3=tie(strong|weak)
+# both-fail 은 strong win 으로 라벨(tie→strong, RouteLLM 기본 동작).
+train_mf () {  # $1=train_data  $2=output
   python lm_routing/routers/matrix_factorization/train_matrix_factorization.py \
     --train-data   "$1" \
     --npy-path     "${BFCL_DIR}/embeddings.npy" \
     --output-path  "$2" \
     --seed "${SEED}" \
-    --tie-goes-to "$3" \
+    --tie-goes-to strong \
     --embedding-model "${EMB_MODEL}" \
     --lr "${MF_LR}" \
     --weight-decay "${MF_WD}" \
@@ -196,14 +196,10 @@ train_mf () {  # $1=train_data  $2=output  $3=tie(strong|weak)
     --batch-size 64
 }
 
-echo "  Pair A MF(tie→strong) → ${DATA_0_8B}/mf_model.pt"
-train_mf "${DATA_0_8B}/train_data.json" "${DATA_0_8B}/mf_model.pt" strong
-echo "  Pair A MF(tie→weak)   → ${DATA_0_8B}/mf_tieweak_model.pt"
-train_mf "${DATA_0_8B}/train_data.json" "${DATA_0_8B}/mf_tieweak_model.pt" weak
-echo "  Pair B MF(tie→strong) → ${DATA_2B}/mf_model.pt"
-train_mf "${DATA_2B}/train_data.json" "${DATA_2B}/mf_model.pt" strong
-echo "  Pair B MF(tie→weak)   → ${DATA_2B}/mf_tieweak_model.pt"
-train_mf "${DATA_2B}/train_data.json" "${DATA_2B}/mf_tieweak_model.pt" weak
+echo "  Pair A MF → ${DATA_0_8B}/mf_model.pt"
+train_mf "${DATA_0_8B}/train_data.json" "${DATA_0_8B}/mf_model.pt"
+echo "  Pair B MF → ${DATA_2B}/mf_model.pt"
+train_mf "${DATA_2B}/train_data.json" "${DATA_2B}/mf_model.pt"
 
 # ─────────────────────────────────────────────
 # Step 5: Train UniRoute router for each pair
@@ -295,37 +291,42 @@ python lm_routing/routers/uniroute/train_uniroute.py \
 # Step 5b: Train per-model regression routers (permodel + cluster-informed variant)
 # ─────────────────────────────────────────────
 # per-model 회귀(R2-Router 골격, budget 제거): weak/strong 각각 P(pass|emb)를 예측.
-# permodel_cluster는 UniRoute식 클러스터 pass율(ψ_weak[k], ψ_strong[k])을 feature로
-# 덧붙여(--cluster-features K) 조각별-상수 신호를 회귀에 융합한 변형.
+# permodel_cluster는 UniRoute의 클러스터 신호(ψ_weak[k], ψ_strong[k])를 feature로
+# 덧붙인 변형인데, 그 클러스터를 새로 KMeans하지 않고 이미 학습된
+# UniRoute(honest K, Ψ=train) 체크포인트의 centroids/ψ 를 그대로 재사용한다
+# → permodel_cluster의 클러스터 신호 = "UniRoute (honest K, Ψ=train)" 과 동일.
 echo ""
-echo "[Step 5b] Training per-model routers (permodel / permodel_cluster K=${PMCLUSTER_K})"
+echo "[Step 5b] Training per-model routers (permodel / permodel_cluster ← UniRoute Ψ=train)"
 
-train_permodel () {  # $1=train_data  $2=output  $3=weak  $4=cluster_k
-  python lm_routing/routers/per_model/train_per_model.py \
-    --train-data   "$1" \
-    --npy-path     "${BFCL_DIR}/embeddings.npy" \
-    --output-path  "$2" \
-    --weak-model   "$3" \
-    --strong-model "${STRONG}" \
-    --seed         "${SEED}" \
-    --embedding-model "${EMB_MODEL}" \
-    --cluster-features "$4"
-}
+# 순수 per-model
+python lm_routing/routers/per_model/train_per_model.py \
+  --train-data "${DATA_0_8B}/train_data.json" --npy-path "${BFCL_DIR}/embeddings.npy" \
+  --output-path "${DATA_0_8B}/permodel_model.pt" --weak-model "${WEAK_0_8B}" \
+  --strong-model "${STRONG}" --seed "${SEED}" --embedding-model "${EMB_MODEL}"
+python lm_routing/routers/per_model/train_per_model.py \
+  --train-data "${DATA_2B}/train_data.json" --npy-path "${BFCL_DIR}/embeddings.npy" \
+  --output-path "${DATA_2B}/permodel_model.pt" --weak-model "${WEAK_2B}" \
+  --strong-model "${STRONG}" --seed "${SEED}" --embedding-model "${EMB_MODEL}"
 
-echo "  Pair A permodel          → ${DATA_0_8B}/permodel_model.pt"
-train_permodel "${DATA_0_8B}/train_data.json" "${DATA_0_8B}/permodel_model.pt" "${WEAK_0_8B}" 0
-echo "  Pair A permodel_cluster  → ${DATA_0_8B}/permodel_cluster_model.pt"
-train_permodel "${DATA_0_8B}/train_data.json" "${DATA_0_8B}/permodel_cluster_model.pt" "${WEAK_0_8B}" "${PMCLUSTER_K}"
-echo "  Pair B permodel          → ${DATA_2B}/permodel_model.pt"
-train_permodel "${DATA_2B}/train_data.json" "${DATA_2B}/permodel_model.pt" "${WEAK_2B}" 0
-echo "  Pair B permodel_cluster  → ${DATA_2B}/permodel_cluster_model.pt"
-train_permodel "${DATA_2B}/train_data.json" "${DATA_2B}/permodel_cluster_model.pt" "${WEAK_2B}" "${PMCLUSTER_K}"
+# per-model + UniRoute(honest K, Ψ=train) 클러스터 신호 재사용
+echo "  Pair A permodel_cluster ← ${DATA_0_8B}/uniroute_train_model.pt"
+python lm_routing/routers/per_model/train_per_model.py \
+  --train-data "${DATA_0_8B}/train_data.json" --npy-path "${BFCL_DIR}/embeddings.npy" \
+  --output-path "${DATA_0_8B}/permodel_cluster_model.pt" --weak-model "${WEAK_0_8B}" \
+  --strong-model "${STRONG}" --seed "${SEED}" --embedding-model "${EMB_MODEL}" \
+  --uniroute-checkpoint "${DATA_0_8B}/uniroute_train_model.pt"
+echo "  Pair B permodel_cluster ← ${DATA_2B}/uniroute_train_model.pt"
+python lm_routing/routers/per_model/train_per_model.py \
+  --train-data "${DATA_2B}/train_data.json" --npy-path "${BFCL_DIR}/embeddings.npy" \
+  --output-path "${DATA_2B}/permodel_cluster_model.pt" --weak-model "${WEAK_2B}" \
+  --strong-model "${STRONG}" --seed "${SEED}" --embedding-model "${EMB_MODEL}" \
+  --uniroute-checkpoint "${DATA_2B}/uniroute_train_model.pt"
 
 # ─────────────────────────────────────────────
 # Step 6: Evaluate all routers on test set
 # ─────────────────────────────────────────────
 echo ""
-echo "[Step 6/7] Evaluating routers (random / mf×2 / uniroute×3 / permodel×2)"
+echo "[Step 6/7] Evaluating routers (random / mf / uniroute×3 / permodel×2)"
 
 RESULT_0_8B="${RESULTS_DIR}/pair_0.8B"
 RESULT_2B="${RESULTS_DIR}/pair_2B"
@@ -333,10 +334,9 @@ mkdir -p "${RESULT_0_8B}" "${RESULT_2B}"
 
 echo "  Pair A → ${RESULT_0_8B}/eval_results.json"
 python -m lm_routing.evals.evaluate \
-  --routers random mf mf_tieweak uniroute uniroute_train uniroute_legacy permodel permodel_cluster \
+  --routers random mf uniroute uniroute_train uniroute_legacy permodel permodel_cluster \
   --test-data         "${DATA_0_8B}/test_data.json" \
   --mf-checkpoint     "${DATA_0_8B}/mf_model.pt" \
-  --mf-tieweak-checkpoint "${DATA_0_8B}/mf_tieweak_model.pt" \
   --uniroute-checkpoint "${DATA_0_8B}/uniroute_model.pt" \
   --uniroute-train-checkpoint "${DATA_0_8B}/uniroute_train_model.pt" \
   --uniroute-legacy-checkpoint "${DATA_0_8B}/uniroute_legacy_model.pt" \
@@ -347,17 +347,16 @@ python -m lm_routing.evals.evaluate \
   --output            "${RESULT_0_8B}" \
   --num-results       "${NUM_RESULTS}" \
   --random-iters      "${RANDOM_ITERS}" \
-  --overwrite-cache   mf mf_tieweak uniroute uniroute_train uniroute_legacy permodel permodel_cluster \
+  --overwrite-cache   mf uniroute uniroute_train uniroute_legacy permodel permodel_cluster \
   --seed              "${SEED}" \
   --quiet \
   --output-json       "${RESULT_0_8B}/eval_results.json"
 
 echo "  Pair B → ${RESULT_2B}/eval_results.json"
 python -m lm_routing.evals.evaluate \
-  --routers random mf mf_tieweak uniroute uniroute_train uniroute_legacy permodel permodel_cluster \
+  --routers random mf uniroute uniroute_train uniroute_legacy permodel permodel_cluster \
   --test-data         "${DATA_2B}/test_data.json" \
   --mf-checkpoint     "${DATA_2B}/mf_model.pt" \
-  --mf-tieweak-checkpoint "${DATA_2B}/mf_tieweak_model.pt" \
   --uniroute-checkpoint "${DATA_2B}/uniroute_model.pt" \
   --uniroute-train-checkpoint "${DATA_2B}/uniroute_train_model.pt" \
   --uniroute-legacy-checkpoint "${DATA_2B}/uniroute_legacy_model.pt" \
@@ -368,7 +367,7 @@ python -m lm_routing.evals.evaluate \
   --output            "${RESULT_2B}" \
   --num-results       "${NUM_RESULTS}" \
   --random-iters      "${RANDOM_ITERS}" \
-  --overwrite-cache   mf mf_tieweak uniroute uniroute_train uniroute_legacy permodel permodel_cluster \
+  --overwrite-cache   mf uniroute uniroute_train uniroute_legacy permodel permodel_cluster \
   --seed              "${SEED}" \
   --quiet \
   --output-json       "${RESULT_2B}/eval_results.json"

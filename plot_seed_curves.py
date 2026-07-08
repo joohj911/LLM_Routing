@@ -44,19 +44,30 @@ def _pair(data):
     return f"{w} vs {s}"
 
 
-def load_runs(paths):
-    """반환: pairs[pair] = {
+def _parse_entry(entry):
+    """'embedding=path' → (embedding, path). '=' 없으면 ('default', path).
+    collect_results 와 동일 규약 → e5=... / cscr=... 로 임베딩을 구분한다."""
+    if "=" in entry:
+        emb, path = entry.split("=", 1)
+        return emb, path
+    return "default", entry
+
+
+def load_runs(entries):
+    """entries: 'emb=path' 또는 'path'. 임베딩별로 분리해서 반환.
+    반환: by_emb[embedding][pair] = {
         'methods': {method: [interp_acc(GRID) per seed]},
         'weak': [..], 'strong': [..], 'drop': float,
         'weak_at_drop': {method: [weak% per seed]} }"""
-    pairs = defaultdict(lambda: {
+    by_emb = defaultdict(lambda: defaultdict(lambda: {
         "methods": defaultdict(list), "weak": [], "strong": [],
         "drop": 1.0, "weak_at_drop": defaultdict(list),
-    })
-    for p in paths:
+    }))
+    for entry in entries:
+        emb, p = _parse_entry(entry)
         data = json.load(open(p))
         pair = _pair(data)
-        P = pairs[pair]
+        P = by_emb[emb][pair]
         P["weak"].append(data["weak_only_accuracy"])
         P["strong"].append(data["strong_only_accuracy"])
         P["drop"] = data.get("per_category_pass_drop", 1.0)
@@ -73,7 +84,7 @@ def load_runs(paths):
             wi = blk.get("operating_point", {}).get("weak_pct_interp")
             if wi is not None:
                 P["weak_at_drop"][method].append(float(wi))
-    return pairs
+    return by_emb
 
 
 def _draw(ax, method, curves):
@@ -200,7 +211,8 @@ def _figure_best(pairs, out_png, title, best_methods):
 def main():
     ap = argparse.ArgumentParser(description="Plot seed-averaged deferral curves (mean ± std bands)")
     ap.add_argument("--results-jsons", nargs="+", required=True,
-                    help="여러 seed의 eval_results.json 경로들 (pair는 JSON에서 자동 그룹화)")
+                    help="여러 seed의 eval_results.json 경로들. 'emb=path' 로 임베딩을 붙이면 "
+                    "(예: e5=... cscr=...) 임베딩마다 별도 그림으로 그린다 (pair는 JSON에서 자동 그룹화).")
     ap.add_argument("--output-prefix", default="seed_curves")
     ap.add_argument("--graph-random", action="store_true",
                     help="전체 그래프에 random baseline도 포함")
@@ -213,22 +225,33 @@ def main():
                     help="all 그래프에 그릴 method 키들 (기본: 등록된 전체). 필터링용.")
     args = ap.parse_args()
 
-    pairs = load_runs(args.results_jsons)
+    by_emb = load_runs(args.results_jsons)
+    multi_emb = len(by_emb) > 1 or "default" not in by_emb
 
-    # (1) 전체 method 밴드
-    if args.figures in ("both", "all"):
-        base = args.all_methods or [
-            "mf", "mf_tieweak", "uniroute", "uniroute_train", "uniroute_legacy",
-            "permodel", "permodel_cluster",
-        ]
-        all_methods = (["random"] if args.graph_random else []) + base
-        _figure(pairs, lambda pair: all_methods, f"{args.output_prefix}_all.png",
-                "Seed-averaged deferral curves (mean ± 1 std)")
+    def _suffix(emb):
+        # 임베딩이 하나뿐이고 라벨이 default면 접미사 없음. 아니면 _<emb> 로 파일 분리.
+        return "" if (emb == "default" and not multi_emb) else f"_{emb}"
 
-    # (2) best: 사용자 선택 method + strong−drop 평균 weak% 표시
-    if args.figures in ("both", "best"):
-        title = " vs ".join(_best_label(m) for m in args.best_methods) + " — mean ± 1 std"
-        _figure_best(pairs, f"{args.output_prefix}_best.png", title, args.best_methods)
+    def _emb_tag(emb):
+        return "" if emb == "default" else f" [{emb}]"
+
+    for emb, pairs in by_emb.items():
+        sfx = _suffix(emb); tag = _emb_tag(emb)
+
+        # (1) 전체 method 밴드 (임베딩마다 별도 그림 → e5 / cscr 분리)
+        if args.figures in ("both", "all"):
+            base = args.all_methods or [
+                "mf", "uniroute", "uniroute_train", "uniroute_legacy",
+                "permodel", "permodel_cluster",
+            ]
+            all_methods = (["random"] if args.graph_random else []) + base
+            _figure(pairs, lambda pair: all_methods, f"{args.output_prefix}_all{sfx}.png",
+                    f"Seed-averaged deferral curves (mean ± 1 std){tag}")
+
+        # (2) best: 사용자 선택 method + strong−drop 평균 weak% 표시
+        if args.figures in ("both", "best"):
+            title = " vs ".join(_best_label(m) for m in args.best_methods) + f" — mean ± 1 std{tag}"
+            _figure_best(pairs, f"{args.output_prefix}_best{sfx}.png", title, args.best_methods)
 
 
 if __name__ == "__main__":
