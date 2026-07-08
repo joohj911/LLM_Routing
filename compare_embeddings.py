@@ -130,6 +130,17 @@ def op_weak(P, m):
     return op_weak_from_curve(mean, target), wstd
 
 
+# 임베딩 태그(emb= 접두사) → 제목용 풀 이름. 없으면 첫 글자만 대문자화.
+EMB_DISPLAY = {
+    "e5": "Multilingual-E5-small",
+    "qwen": "Qwen3-Embedding-0.6B",
+}
+
+
+def emb_title(emb):
+    return EMB_DISPLAY.get(emb.lower(), emb[:1].upper() + emb[1:])
+
+
 def make_graph(emb, pairs, drop, out_png):
     plist = list(pairs.keys())
     fig, axes = plt.subplots(1, len(plist), figsize=(7 * len(plist), 5.5))
@@ -139,44 +150,25 @@ def make_graph(emb, pairs, drop, out_png):
         P = pairs[pair]
         wk = float(np.mean(P["weak"])); sg = float(np.mean(P["strong"])); dr = P["drop"]
         target = sg - dr
-        drawn = []   # (method, mean_curve, op_weak) — inset 재사용
         for m in KEYS:
             if m not in P["curves"]:
                 continue
             arr = np.vstack(P["curves"][m]); mean = arr.mean(0); std = arr.std(0)
-            ow, wstd = op_weak(P, m)   # 평균 곡선 ∩ (strong−drop) 의 weak% + seed std
-            wtxt = f"  ({ow:.1f}±{wstd:.1f}% @−{dr:.0f}%p)" if not np.isnan(ow) else ""
+            ow, _ = op_weak(P, m)      # 평균 곡선 ∩ (strong−drop) 의 weak%
+            wtxt = f"  ({ow:.1f}% −{dr:.0f}%)" if not np.isnan(ow) else ""
             ax.plot(GRID, mean, color=COLOR[m], lw=2.2, label=f"{LABEL[m]}{wtxt}")
             ax.fill_between(GRID, mean - std, mean + std, color=COLOR[m], alpha=0.13, lw=0)
             if not np.isnan(ow):
                 # 점 = 곡선 ∩ (strong−drop): x=100−weak%(=strong%), y=target (숫자는 legend 에만)
                 ax.plot([100.0 - ow], [target], "o", color=COLOR[m], ms=7, zorder=5)
-                drawn.append((m, mean, ow))
         ax.axhline(wk, color="#555", ls=":", lw=1.0, label=f"Weak only ({wk:.1f}%)")
         ax.axhline(sg, color="#C62828", ls=":", lw=1.0, label=f"Strong only ({sg:.1f}%)")
-        ax.axhline(sg - dr, color="#C62828", ls=(0, (1, 3)), lw=0.9, label=f"Strong −{dr:.0f}%p")
+        ax.axhline(sg - dr, color="#C62828", ls=(0, (1, 3)), lw=0.9, label=f"Strong −{dr:.0f}%")
         ax.plot([0, 100], [wk, sg], color="#888", ls="--", lw=1.2, label="Random (diagonal)")
         ax.set_xlabel("Strong Model Calls (%)"); ax.set_ylabel("Pass Rate (%)")
         ax.set_title(pair, fontweight="bold"); ax.grid(True, alpha=0.3); ax.set_xlim(-2, 102)
         ax.legend(loc="lower right", fontsize=8)
-
-        # ── 좌상단 확대 inset: strong−drop 교차 부분 ──
-        ops = [100.0 - ow for _, _, ow in drawn]
-        if ops:
-            xlo = max(0.0, min(ops) - 3.0); xhi = min(100.0, max(ops) + 3.0)
-            if xhi - xlo < 6.0:                      # 너무 좁으면 최소 폭 확보
-                mid = (xlo + xhi) / 2; xlo, xhi = max(0.0, mid - 3), min(100.0, mid + 3)
-            ylo, yhi = target - 3.0, min(sg + 0.4, target + 3.0)
-            axins = ax.inset_axes([0.06, 0.56, 0.40, 0.40])
-            for m, mean, ow in drawn:
-                axins.plot(GRID, mean, color=COLOR[m], lw=1.6)
-                axins.plot([100.0 - ow], [target], "o", color=COLOR[m], ms=5, zorder=5)
-            axins.axhline(target, color="#C62828", ls=(0, (1, 3)), lw=0.9)
-            axins.set_xlim(xlo, xhi); axins.set_ylim(ylo, yhi)
-            axins.tick_params(labelsize=6); axins.grid(True, alpha=0.3)
-            axins.set_title(f"zoom @ Strong−{dr:.0f}%p", fontsize=7)
-            ax.indicate_inset_zoom(axins, edgecolor="#999999", alpha=0.5)
-    fig.suptitle(f"Seed-averaged deferral curves — embedding: {emb}", fontsize=13)
+    fig.suptitle(f"Seed-averaged deferral curves — embedding: {emb_title(emb)}", fontsize=13)
     plt.tight_layout(); plt.savefig(out_png, dpi=150, bbox_inches="tight"); plt.close(fig)
     print(f"Saved → {out_png}")
 
