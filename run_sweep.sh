@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # run_sweep.sh — 임베딩 2종 × seed 3개 스윕 후 seed 평균 리포트 생성.
 #
-#   임베딩 : e5(intfloat/multilingual-e5-small) / qwen(Qwen/Qwen3-Embedding-0.6B)
+#   임베딩 : e5(intfloat/multilingual-e5-small) / e5large(intfloat/multilingual-e5-large)
 #   seed   : 41 42 43 (라우터 seed). split-seed=42 고정(test set 상수 → band=라우터 변동).
 #   라우터 : run_experiments.sh 가 학습/평가(최종 리포트는 5개만: MF/UniRoute/Uni-R2/R2-Router/CSCR).
 #
@@ -17,8 +17,8 @@ set -euo pipefail
 
 SPLIT_SEED=42
 SEEDS=(41 42 43)
-EMB_ORDER=(e5 qwen)          # 첫째=baseline(비교 기준)
-declare -A EMB=( [e5]="intfloat/multilingual-e5-small" [qwen]="Qwen/Qwen3-Embedding-0.6B" )
+EMB_ORDER=(e5 e5large)       # 첫째=baseline(비교 기준). e5-small → e5-large 동일계열 업그레이드
+declare -A EMB=( [e5]="intfloat/multilingual-e5-small" [e5large]="intfloat/multilingual-e5-large" )
 EXTRA=("$@")                 # --load-in-4bit 등 passthrough
 
 EVAL_JSON="./eval_results.json"
@@ -63,12 +63,12 @@ done
 
 echo ""
 echo "############################################################"
-echo "# 최종 seed 평균 리포트 (선형보간 weak% + AUC + e5↔qwen 비교)"
+echo "# 최종 seed 평균 리포트 (선형보간 weak% + AUC + e5-small↔e5-large 비교)"
 echo "############################################################"
 python compare_embeddings.py --results-jsons "${JSONS[@]}" \
   --output-prefix final --output-excel final_report.xlsx
 
 echo ""
 echo "Done."
-echo "  임베딩별 그래프 : final_e5.png / final_qwen.png"
+echo "  임베딩별 그래프 : final_e5.png / final_e5large.png"
 echo "  리포트(Excel)   : final_report.xlsx (Per-Embedding / Embedding Comparison)"
