@@ -163,7 +163,9 @@ def generate_embeddings(prompts: list[dict], output_dir: str,
     print(f"\nLoading {embedding_model} ...")
     model = SentenceTransformer(embedding_model)
 
-    texts = [f"query: {p['prompt']}" for p in prompts]
+    # 라우터 추론(format_query)과 반드시 동일한 입력 형식으로 임베딩해야 한다.
+    from lm_routing.routers.matrix_factorization.model import format_query
+    texts = [format_query(p["prompt"], embedding_model) for p in prompts]
     print(f"Encoding {len(texts)} prompts ...")
     embeddings = model.encode(texts, batch_size=256, show_progress_bar=True)
 

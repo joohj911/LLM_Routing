@@ -16,6 +16,22 @@ def get_embedding_model(name: str = DEFAULT_EMBEDDING_MODEL):
     return _EMBEDDING_MODELS[name]
 
 
+# Qwen3-Embedding 은 last-token pooling + instruction 형식을 권장한다.
+# 라우팅 용도로는 프롬프트를 "query" 로 표현한다(문서/질의 비대칭 없음).
+QWEN_EMBED_TASK = "Given a user request, represent it to route to the most suitable LLM"
+
+
+def format_query(prompt: str, embedding_model: str) -> str:
+    """임베딩 모델별 권장 입력 형식으로 프롬프트를 감싼다. 오프라인 임베딩 생성과
+    라우터 추론이 반드시 같은 형식을 써야 하므로 한 곳에서 정의한다.
+      - Qwen3-Embedding : "Instruct: {task}\\nQuery:{prompt}" (Qwen 권장)
+      - e5 계열/기타     : "query: {prompt}" (비대칭 검색 prefix)"""
+    name = (embedding_model or "").lower()
+    if "qwen3-embedding" in name:
+        return f"Instruct: {QWEN_EMBED_TASK}\nQuery:{prompt}"
+    return f"query: {prompt}"
+
+
 def build_classifier(dim: int, num_classes: int, mlp_hidden: int = 0):
     """
     분류기 head 생성. mlp_hidden=0 이면 기존 선형(bias 없음), >0 이면 1-hidden MLP.
@@ -69,9 +85,9 @@ class MFModel(torch.nn.Module, PyTorchModelHubMixin):
         model_embed = self.P(model_id)
         model_embed = torch.nn.functional.normalize(model_embed, p=2, dim=1)
 
-        # e5 계열은 비대칭 검색용 "query: " prefix 사용 (small/large 동일)
+        # 임베딩 모델별 권장 입력 형식 (e5 "query:" / Qwen3-Embedding instruct)
         prompt_embed = get_embedding_model(self.embedding_model).encode(
-            f"query: {prompt}",
+            format_query(prompt, self.embedding_model),
             convert_to_tensor=True,
             device=str(self.get_device()),
         )

@@ -346,12 +346,18 @@ if [[ $WITH_CSCR -eq 1 ]]; then
   echo ""
   echo "[Step 5c] CSCR descriptors + contrastive router (probes=${CSCR_NPROBES}, top_k=${CSCR_TOPK})"
   train_cscr_pair () {  # $1=data_dir  $2=weak
-    python lm_routing/routers/cscr/descriptors.py \
-      --prompts-path "${BFCL_DIR}/prompts.json" \
-      --weak-model "$2" --strong-model "${STRONG}" \
-      --output-path "$1/cscr_descriptors.npz" \
-      --n-probes "${CSCR_NPROBES}" --top-k "${CSCR_TOPK}" --n-tokens "${CSCR_NTOKENS}" \
-      --seed "${SEED}" ${LOAD_4BIT}
+    # descriptor 는 모델 logit footprint(임베딩·라우터seed 무관) → 이미 있으면 재사용
+    # (seed sweep 시 GPU probe 추론 반복 방지). 다시 뽑으려면 .npz 를 지우면 됨.
+    if [[ -f "$1/cscr_descriptors.npz" ]]; then
+      echo "    [reuse] $1/cscr_descriptors.npz (기존 descriptor 재사용)"
+    else
+      python lm_routing/routers/cscr/descriptors.py \
+        --prompts-path "${BFCL_DIR}/prompts.json" \
+        --weak-model "$2" --strong-model "${STRONG}" \
+        --output-path "$1/cscr_descriptors.npz" \
+        --n-probes "${CSCR_NPROBES}" --top-k "${CSCR_TOPK}" --n-tokens "${CSCR_NTOKENS}" \
+        --seed "${SEED}" ${LOAD_4BIT}
+    fi
     python lm_routing/routers/cscr/train_cscr.py \
       --train-data "$1/train_data.json" --npy-path "${BFCL_DIR}/embeddings.npy" \
       --descriptors "$1/cscr_descriptors.npz" --output-path "$1/cscr_model.pt" \

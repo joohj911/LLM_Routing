@@ -237,6 +237,33 @@ Output:
 - **Sheet "Summary"** — weak-only and strong-only accuracy per model pair
 - **Sheet "Graphs"** — embedded PNG with side-by-side deferral curve plots
 
+## Seed sweep + embedding comparison (e5 vs Qwen3-Embedding)
+
+Run 3 router seeds (41/42/43, split-seed fixed at 42) across two embedding
+backbones and produce a seed-averaged report. Each embedding is re-embedded with
+its own recommended input format (e5 `query:` prefix vs Qwen3-Embedding
+`Instruct:…\nQuery:…`), handled centrally by `format_query` so offline embedding
+and router inference always match.
+
+```bash
+bash run_sweep.sh            # 2 embeddings × 3 seeds, then the final report
+```
+
+Reuse keeps it cheap: model BFCL eval (`eval_results.json`) is computed once
+(embedding/seed-independent); embeddings once per backbone; CSCR logit
+descriptors once per data dir. Output:
+
+- `final_e5.png`, `final_qwen.png` — per-embedding seed-averaged deferral curves
+  (mean ± 1 std) for the 5 final methods (MF / UniRoute / Uni-R2 / R2-Router / CSCR)
+- `final_report.xlsx` — **Per-Embedding (interp)** sheet (seed-averaged
+  `weak_pct_interp` at Strong−1%p and deferral-curve AUC) and an **Embedding
+  Comparison** sheet (Δ weak% and Δ AUC, Qwen − e5)
+
+All headline numbers are the **linear-interpolated** weak-model usage at
+`Strong accuracy − 1%p` (the per-category `weak_pct_interp`), not raw measured
+threshold points. `compare_embeddings.py` can also be run standalone on existing
+`eval_results.json`s using the `emb=path` convention.
+
 ## Local Inference (Two-GPU Setup)
 
 After training, load both models locally with `LocalController`. Each model is pinned to its own GPU — no per-request model loading:

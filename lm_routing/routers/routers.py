@@ -5,7 +5,7 @@ import random
 import numpy as np
 import torch
 
-from lm_routing.routers.matrix_factorization.model import MFModel, get_embedding_model
+from lm_routing.routers.matrix_factorization.model import MFModel, get_embedding_model, format_query
 
 
 def no_parallel(cls):
@@ -112,7 +112,7 @@ class UniRouteRouter(Router):
     def calculate_strong_win_rate(self, prompt: str) -> float:
         import numpy as np
         emb = self._embed.encode(
-            f"query: {prompt}",
+            format_query(prompt, self.model.embedding_model),
             convert_to_tensor=False,
             normalize_embeddings=False,
         )
@@ -170,7 +170,7 @@ class R2Router(Router):
 
     def calculate_strong_win_rate(self, prompt: str) -> float:
         emb = self._embed.encode(
-            f"query: {prompt}",
+            format_query(prompt, self.model.embedding_model),
             convert_to_tensor=False,
             normalize_embeddings=False,
         )
@@ -196,7 +196,7 @@ class CSCRRouter(Router):
 
     def calculate_strong_win_rate(self, prompt: str) -> float:
         emb = self._embed.encode(
-            f"query: {prompt}",
+            format_query(prompt, self.model.embedding_model),
             convert_to_tensor=False,
             normalize_embeddings=False,
         )
