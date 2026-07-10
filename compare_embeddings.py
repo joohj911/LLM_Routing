@@ -253,7 +253,8 @@ def main():
     print(f"Saved → {args.output_excel}")
 
     # (3) 콘솔 요약
-    print("\n=== e5 → Qwen 비교 (선형보간 weak% @ Strong−drop, seed 평균) ===")
+    _btag = f"{emb_title(base)} → {emb_title(new)}" if len(embs) == 2 else ""
+    print(f"\n=== {_btag} 비교 (보간 weak% @ Strong−drop, seed 평균) ===")
     if not comp.empty:
         for _, r in comp.iterrows():
             print(f"  [{r['Pair']}] {r['Method']:<10} "
